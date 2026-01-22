@@ -44,13 +44,11 @@ async def progress_bar(current, total, status_msg, start_time):
         except:
             pass
 
-# --- Helper: TeraBox Direct Link Generator (Basic Scraper) ---
+# --- Helper: TeraBox Direct Link Generator ---
 def get_terabox_direct_link(url):
-    # Note: TeraBox changes their API frequently. 
-    # This is a standard header-based approach.
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Cookie": "browserid=1; lang=en;" # Simplified cookie
+        "Cookie": "browserid=1; lang=en;" 
     }
     try:
         req = requests.get(url, headers=headers)
@@ -65,33 +63,28 @@ async def terabox_handler(client, message):
     status_msg = await message.reply("🔎 **Processing TeraBox Link...**\nPlease wait, this can take time.")
 
     try:
-        # 1. Download from TeraBox to Server
+        # 1. Download to Server
         direct_link = get_terabox_direct_link(url)
         if not direct_link:
             return await status_msg.edit("❌ Failed to get direct link from TeraBox.")
 
         file_path = f"downloads/terabox_{int(time.time())}.mp4"
-        
         await status_msg.edit(f"⬇️ **Downloading to Server...**\n(This consumes server bandwidth)")
         
-        # Stream download to avoid RAM overflow
         async with aiohttp.ClientSession() as session:
             async with session.get(direct_link) as resp:
                 if resp.status != 200:
                     return await status_msg.edit("❌ TeraBox refused connection.")
-                
                 with open(file_path, 'wb') as f:
                     while True:
-                        chunk = await resp.content.read(1024*1024) # 1MB chunks
-                        if not chunk:
-                            break
+                        chunk = await resp.content.read(1024*1024)
+                        if not chunk: break
                         f.write(chunk)
         
-        # 2. Upload to Telegram (Indexing)
+        # 2. Upload to Telegram
         await status_msg.edit("⬆️ **Uploading to Telegram Cloud...**")
         start_time = time.time()
         
-        # Upload to Log Channel to get File ID
         log_msg = await client.send_document(
             Config.CHANNEL_ID,
             document=file_path,
@@ -100,14 +93,10 @@ async def terabox_handler(client, message):
             progress_args=(status_msg, start_time)
         )
         
-        # Index it in MongoDB
-        await add_file(log_msg)
-
-        # 3. Cleanup & Response
-        os.remove(file_path) # Delete from server to free space
+        await add_file(log_msg) # Index
+        os.remove(file_path) # Cleanup
         
         stream_link = f"{Config.BASE_URL}/watch/{log_msg.id}"
-        
         btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚡ Fast Download", url=stream_link)],
             [InlineKeyboardButton("📺 Watch Online", url=stream_link)]
@@ -140,14 +129,11 @@ async def search_handler(client, message):
             [InlineKeyboardButton("📥 Fast Download", url=stream_link)],
             [InlineKeyboardButton("🗑 Delete (30m)", callback_data=f"del_msg")]
         ])
-        
         sent_msg = await message.reply_text(
             f"🎬 **File Found:**\n`{file['file_name']}`\n\n🔗 [Fast Link]({stream_link})",
             reply_markup=btn
         )
-        
-        # Auto Delete Task
-        asyncio.create_task(auto_delete(sent_msg, 1800)) # 30 mins
+        asyncio.create_task(auto_delete(sent_msg, 1800))
 
     if not found:
         await message.reply("❌ No files found.")
@@ -156,7 +142,6 @@ async def auto_delete(msg, delay):
     await asyncio.sleep(delay)
     try:
         await msg.delete()
-        await msg.reply("⚠️ This message has been deleted for security.", quote=False)
     except:
         pass
 
@@ -171,7 +156,6 @@ async def broadcast_handler(client, message):
     
     sent = 0
     failed = 0
-    
     async for user in users:
         try:
             await message.reply_to_message.copy(chat_id=user['user_id'])
@@ -185,41 +169,32 @@ async def broadcast_handler(client, message):
             
     await msg.edit(f"✅ **Broadcast Complete!**\n\nSent: {sent}\nFailed: {failed}")
 
-# --- Feature: Welcome Message & Status ---
+# --- Feature: Welcome Message (DEBUG MODE) ---
+# I have replaced the old handler with this secure one.
 @bot.on_message(filters.command("start"))
 async def start_handler(client, message):
-    # Save User to DB
-    await add_user(message.from_user.id)
-    
-    # 1. The Image URL
-    LIVE_IMG = "https://files.catbox.moe/maft7d.jpg"
+    print(f"DEBUG: Start command received from {message.from_user.id}")
 
-    # 2. The Features Text
+    # 1. Try to Save User (Catch Error if DB fails)
+    try:
+        await add_user(message.from_user.id)
+    except Exception as e:
+        print(f"DEBUG: Database Error: {e}")
+
+    # 2. Define Content
+    LIVE_IMG = "https://files.catbox.moe/maft7d.jpg"
     welcome_text = (
         f"👋 **Hello {message.from_user.mention}!**\n\n"
         f"🟢 **Bot Status:** `Online & High Speed`\n"
         f"I am your advanced **File Manager & Stream Bot**. Here is what I can do:\n\n"
-        
-        f"🚀 **Fast Speed:**\n"
-        f"I convert Telegram files into **Direct High-Speed Download Links** (No speed caps!).\n\n"
-        
-        f"🔎 **Instant Search:**\n"
-        f"Type `/search Name` to find any movie or file from my database instantly.\n\n"
-        
-        f"📥 **External Downloader:**\n"
-        f"Send me a **TeraBox** link, and I will download and upload it to Telegram for you.\n\n"
-        
-        f"✏️ **Smart Rename:**\n"
-        f"Rename any file instantly without re-uploading! Just add `?name=NewName.mkv` to your download link.\n\n"
-        
-        f"⏱ **Auto-Delete:**\n"
-        f"For security, all search results and files are automatically deleted after **30 minutes**.\n\n"
-        
-        f"📺 **Streaming:**\n"
-        f"Watch videos directly in your browser without downloading."
+        f"🚀 **Fast Speed:** I convert Telegram files into **Direct High-Speed Download Links**.\n\n"
+        f"🔎 **Instant Search:** Type `/search Name` to find any movie.\n\n"
+        f"📥 **External Downloader:** Send me a **TeraBox** link to download it.\n\n"
+        f"✏️ **Smart Rename:** Add `?name=NewName.mkv` to your download link.\n\n"
+        f"⏱ **Auto-Delete:** Search results delete after 30 mins.\n\n"
+        f"📺 **Streaming:** Watch videos directly in your browser."
     )
 
-    # 3. Buttons
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("➕ Add Me to Your Group", url=f"http://t.me/{client.me.username}?startgroup=true"),
@@ -231,19 +206,26 @@ async def start_handler(client, message):
         ]
     ])
 
-    # 4. Send the Message
-    await client.send_photo(
-        chat_id=message.chat.id,
-        photo=LIVE_IMG,
-        caption=welcome_text,
-        reply_markup=buttons
-    )
+    # 3. Try to Send Photo (Fallback to text if Image fails)
+    try:
+        await client.send_photo(
+            chat_id=message.chat.id,
+            photo=LIVE_IMG,
+            caption=welcome_text,
+            reply_markup=buttons
+        )
+    except Exception as e:
+        print(f"DEBUG: Image Failed: {e}")
+        # Send Text Only if Image Fails
+        await client.send_message(
+            chat_id=message.chat.id,
+            text=f"⚠️ **Image Error (Bot is Online):**\n\n{welcome_text}",
+            reply_markup=buttons
+        )
 
 # --- Start Bot & Web Server ---
 if __name__ == "__main__":
     print("Bot Starting on Port 8080...")
-    # NOTE: The port is technically handled inside web_server.py/config.py
-    # but we ensure it's initialized correctly here if needed.
     Config.PORT = 8080 
     bot.loop.run_until_complete(web_server(bot))
     bot.run()
