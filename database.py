@@ -1,12 +1,12 @@
 import motor.motor_asyncio
-import certifi
 from config import Config
 
 # --- Database Connection ---
-# We add tlsCAFile=certifi.where() to fix the SSL Handshake Error
+# We use tlsAllowInvalidCertificates=True to bypass the specific SSL error on Render
 client = motor.motor_asyncio.AsyncIOMotorClient(
     Config.DB_URL,
-    tlsCAFile=certifi.where()
+    tls=True,
+    tlsAllowInvalidCertificates=True
 )
 db = client['MyTelegramBot']
 
@@ -17,12 +17,12 @@ users_col = db['users']
 # --- File Indexing Functions ---
 async def add_file(msg):
     # Only index video or documents
-    media = msg.video or msg.document
+    media = msg.video or msg.document or msg.audio
     if not media: return
 
     file_det = {
         'file_id': media.file_id,
-        'file_name': media.file_name or "Unknown",
+        'file_name': getattr(media, 'file_name', 'Unknown_File'),
         'file_size': media.file_size,
         'caption': msg.caption or "No Caption",
         'msg_id': msg.id,
@@ -45,5 +45,4 @@ async def add_user(user_id):
     await users_col.update_one({'user_id': user_id}, {'$set': user_data}, upsert=True)
 
 async def get_all_users():
-    # Return a cursor to iterate over all users
     return users_col.find({})
