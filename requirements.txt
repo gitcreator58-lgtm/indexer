@@ -1,7 +1,8 @@
 Pyrogram
 TgCrypto
 motor
-aiohttp
-python-dotenv
 dnspython
+aiohttp
+requests
 uvloop
+python-dotenv
