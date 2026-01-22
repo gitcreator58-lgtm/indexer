@@ -192,7 +192,7 @@ async def start_handler(client, message):
     await add_user(message.from_user.id)
     
     # 1. The Image URL
-    LIVE_IMG = "https://graph.org/file/481f34937768545812543.jpg"
+    LIVE_IMG = "https://files.catbox.moe/maft7d.jpg"
 
     # 2. The Features Text
     welcome_text = (
@@ -241,6 +241,9 @@ async def start_handler(client, message):
 
 # --- Start Bot & Web Server ---
 if __name__ == "__main__":
-    print("Bot Starting...")
+    print("Bot Starting on Port 8080...")
+    # NOTE: The port is technically handled inside web_server.py/config.py
+    # but we ensure it's initialized correctly here if needed.
+    Config.PORT = 8080 
     bot.loop.run_until_complete(web_server(bot))
     bot.run()
