@@ -1,8 +1,13 @@
 import motor.motor_asyncio
+import certifi
 from config import Config
 
 # --- Database Connection ---
-client = motor.motor_asyncio.AsyncIOMotorClient(Config.DB_URL)
+# We add tlsCAFile=certifi.where() to fix the SSL Handshake Error
+client = motor.motor_asyncio.AsyncIOMotorClient(
+    Config.DB_URL,
+    tlsCAFile=certifi.where()
+)
 db = client['MyTelegramBot']
 
 # --- Collections ---
@@ -33,7 +38,7 @@ async def search_files(query):
 async def get_file_by_id(file_id):
     return await files_col.find_one({'file_id': file_id})
 
-# --- User Management Functions (Required for Broadcast) ---
+# --- User Management Functions ---
 async def add_user(user_id):
     # Save user to DB if they don't exist
     user_data = {'user_id': user_id}
