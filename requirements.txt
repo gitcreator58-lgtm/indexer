@@ -1,0 +1,7 @@
+Pyrogram
+TgCrypto
+motor
+aiohttp
+python-dotenv
+dnspython
+uvloop
