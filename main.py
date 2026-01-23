@@ -20,9 +20,8 @@ from telegram.error import BadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- CONFIGURATION ---
-# ⚠️ ACTION REQUIRED: PASTE YOUR REAL DATA BELOW ⚠️
-TOKEN = '8501324652:AAEE84y5ZCnkWjMayqvL9w3OB1tFaAHf6oY'  # <--- DELETE THIS TEXT AND PASTE YOUR TOKEN
-ADMIN_ID = 8072674531                 # <--- DELETE THIS NUMBER AND TYPE YOUR ADMIN ID
+TOKEN = '8501324652:AAEE84y5ZCnkWjMayqvL9w3OB1tFaAHf6oY' 
+ADMIN_ID = 8072674531 
 IST = pytz.timezone('Asia/Kolkata')
 PORT = 8080
 
@@ -57,28 +56,21 @@ def start_web_server():
 def setup_db():
     conn = sqlite3.connect('bot_data.db')
     c = conn.cursor()
-    # Categories
     c.execute('''CREATE TABLE IF NOT EXISTS categories 
                  (id INTEGER PRIMARY KEY, name TEXT)''')
-    # Channels/Groups (Products)
     c.execute('''CREATE TABLE IF NOT EXISTS channels 
                  (id INTEGER PRIMARY KEY, category_id INTEGER, name TEXT, 
                   invite_link TEXT, price TEXT, channel_id TEXT)''')
-    # Payment Settings
     c.execute('''CREATE TABLE IF NOT EXISTS payment_settings 
                  (id INTEGER PRIMARY KEY, upi_id TEXT, paypal_link TEXT)''')
-    # Pending Payments
     c.execute('''CREATE TABLE IF NOT EXISTS pending_payments 
                  (user_id INTEGER, channel_db_id INTEGER, timestamp TEXT)''')
-    # Subscriptions (Active Members)
     c.execute('''CREATE TABLE IF NOT EXISTS subscriptions 
                  (user_id INTEGER, channel_db_id INTEGER, join_date TEXT, 
                   expiry_date TEXT, channel_chat_id TEXT)''')
-    # Broadcast Channels (List of channels admin can broadcast to)
     c.execute('''CREATE TABLE IF NOT EXISTS broadcast_channels 
                  (id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT)''')
     
-    # Initialize settings if empty
     c.execute("SELECT * FROM payment_settings")
     if not c.fetchone():
         c.execute("INSERT INTO payment_settings (upi_id, paypal_link) VALUES (?, ?)", 
@@ -108,15 +100,163 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("📢 Setup Broadcast", callback_data='admin_broadcast')],
             [InlineKeyboardButton("➕ Add Broadcast Channel", callback_data='admin_add_bc_chan'),
              InlineKeyboardButton("🚫 Manage Expired", callback_data='admin_manage_expire')],
-            [InlineKeyboardButton("👀 View Stats", callback_data='admin_stats')]
+            [InlineKeyboardButton("👀 View Stats", callback_data='admin_stats'),
+             InlineKeyboardButton("🗑 Manage / Delete Data", callback_data='admin_delete_menu')]
         ]
-        await update.message.reply_text(
-            "👑 **Admin Dashboard**\nSelect an option to customize your bot.\n\n🤖 **BOT created by RETOUCH**", 
-            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'
-        )
+        text = "👑 **Admin Dashboard**\nSelect an option to customize your bot.\n\n🤖 **BOT created by RETOUCH**"
+        
+        if update.callback_query:
+            await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        else:
+            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     else:
-        # User View
         await user_show_categories(update, context)
+
+# --- ADMIN: SET PAYMENT INFO (FIXED) ---
+
+async def set_pay_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("💰 **Payment Setup**\n\nPlease enter your **UPI ID** (e.g., merchant@upi):", parse_mode='Markdown')
+    return SET_UPI
+
+async def set_pay_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_upi'] = update.message.text
+    await update.message.reply_text("✅ UPI Saved.\n\nNow enter your **PayPal Link** (e.g., paypal.me/user):")
+    return SET_PAYPAL
+
+async def set_pay_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_paypal = update.message.text
+    new_upi = context.user_data['new_upi']
+    
+    conn = get_db()
+    c = conn.cursor()
+    # Update row 1
+    c.execute("UPDATE payment_settings SET upi_id=?, paypal_link=? WHERE id=?", (new_upi, new_paypal, 1))
+    # Or insert if missing (though setup_db handles this)
+    if c.rowcount == 0:
+         c.execute("INSERT INTO payment_settings (upi_id, paypal_link) VALUES (?, ?)", (new_upi, new_paypal))
+    conn.commit()
+    conn.close()
+    
+    await update.message.reply_text("✅ **Payment Details Updated Successfully!**")
+    return ConversationHandler.END
+
+# --- ADMIN: VIEW STATS (FIXED) ---
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT count(*) FROM categories")
+    n_cats = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM channels")
+    n_chans = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM subscriptions")
+    n_subs = c.fetchone()[0]
+    c.execute("SELECT count(*) FROM broadcast_channels")
+    n_bc = c.fetchone()[0]
+    conn.close()
+    
+    text = (f"📊 **Bot Statistics**\n\n"
+            f"📂 Categories: `{n_cats}`\n"
+            f"📺 Active Plans/Channels: `{n_chans}`\n"
+            f"👥 Active Members: `{n_subs}`\n"
+            f"📢 Broadcast Channels: `{n_bc}`")
+    
+    await update.callback_query.message.edit_text(text, parse_mode='Markdown', 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
+
+# --- ADMIN: MANAGE EXPIRED (FIXED) ---
+
+async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("Running expiry check...", show_alert=True)
+    await check_expiry_job(context) # Run the logic manually
+    await update.callback_query.message.reply_text("✅ **Expiry Check Completed.**\nUsers with expired memberships have been kicked.")
+
+# --- ADMIN: DELETE MENU (NEW FEATURE) ---
+
+async def admin_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🗑 Delete Categories", callback_data='del_menu_cats')],
+        [InlineKeyboardButton("🗑 Delete Channels", callback_data='del_menu_chans')],
+        [InlineKeyboardButton("🗑 Delete Broadcast Chans", callback_data='del_menu_bc')],
+        [InlineKeyboardButton("🔄 Reset Payment Info", callback_data='del_reset_pay')],
+        [InlineKeyboardButton("🔙 Back to Admin", callback_data='user_home')]
+    ]
+    await update.callback_query.message.edit_text("🗑 **Delete / Reset Manager**\nSelect what you want to remove:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def delete_item_selector(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    conn = get_db()
+    c = conn.cursor()
+    
+    keyboard = []
+    text = "Select an item to DELETE permanently:"
+    
+    if data == 'del_menu_cats':
+        c.execute("SELECT * FROM categories")
+        rows = c.fetchall()
+        for r in rows:
+            keyboard.append([InlineKeyboardButton(f"❌ {r[1]}", callback_data=f"perform_del_cat_{r[0]}")])
+            
+    elif data == 'del_menu_chans':
+        c.execute("SELECT * FROM channels")
+        rows = c.fetchall()
+        for r in rows:
+            keyboard.append([InlineKeyboardButton(f"❌ {r[2]}", callback_data=f"perform_del_chan_{r[0]}")])
+            
+    elif data == 'del_menu_bc':
+        c.execute("SELECT * FROM broadcast_channels")
+        rows = c.fetchall()
+        for r in rows:
+            keyboard.append([InlineKeyboardButton(f"❌ {r[1]}", callback_data=f"perform_del_bc_{r[0]}")])
+            
+    elif data == 'del_reset_pay':
+        c.execute("UPDATE payment_settings SET upi_id='not_set', paypal_link='not_set'")
+        conn.commit()
+        conn.close()
+        await query.answer("Payment info reset!", show_alert=True)
+        await admin_delete_menu(update, context)
+        return
+
+    conn.close()
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data='admin_delete_menu')])
+    
+    if not keyboard or (len(keyboard) == 1):
+        text = "No items found to delete."
+        
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    conn = get_db()
+    c = conn.cursor()
+    
+    try:
+        if data.startswith('perform_del_cat_'):
+            oid = int(data.split('_')[-1])
+            c.execute("DELETE FROM categories WHERE id=?", (oid,))
+            c.execute("DELETE FROM channels WHERE category_id=?", (oid,)) # Cleanup channels in that cat
+            await query.answer("Category Deleted!", show_alert=True)
+            await delete_item_selector(update._replace(callback_query=query._replace(data='del_menu_cats')), context)
+            
+        elif data.startswith('perform_del_chan_'):
+            oid = int(data.split('_')[-1])
+            c.execute("DELETE FROM channels WHERE id=?", (oid,))
+            await query.answer("Channel Deleted!", show_alert=True)
+            await delete_item_selector(update._replace(callback_query=query._replace(data='del_menu_chans')), context)
+            
+        elif data.startswith('perform_del_bc_'):
+            oid = int(data.split('_')[-1])
+            c.execute("DELETE FROM broadcast_channels WHERE id=?", (oid,))
+            await query.answer("Broadcast Channel Deleted!", show_alert=True)
+            await delete_item_selector(update._replace(callback_query=query._replace(data='del_menu_bc')), context)
+            
+        conn.commit()
+    except Exception as e:
+        await query.answer(f"Error: {e}", show_alert=True)
+    finally:
+        conn.close()
 
 # --- USER FLOW: SHOW CATEGORIES & CHANNELS ---
 
@@ -131,7 +271,6 @@ async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYP
     for cat in cats:
         keyboard.append([InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}")])
     
-    # ADDED BRANDING HERE
     text = "👋 Welcome! Please select a category to view our plans:\n\n🤖 **BOT created by RETOUCH**"
     
     if update.callback_query:
@@ -152,7 +291,6 @@ async def user_show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     keyboard = []
     for chan in chans:
-        # chan: id, cat_id, name, link, price, chan_id
         keyboard.append([InlineKeyboardButton(f"{chan[2]} - {chan[4]}", callback_data=f"buy_{chan[0]}")])
     
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="user_home")])
@@ -165,7 +303,6 @@ async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     chan_db_id = int(query.data.split('_')[1])
     
-    # Save selection to context
     context.user_data['selected_channel_id'] = chan_db_id
 
     conn = get_db()
@@ -207,7 +344,6 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Session expired. Please start over /start")
         return ConversationHandler.END
 
-    # Notify Admin
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT name, price FROM channels WHERE id=?", (selected_chan_id,))
@@ -252,22 +388,19 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT * FROM channels WHERE id=?", (chan_db_id,))
-        channel = c.fetchone() # id, cat, name, link, price, chat_id
+        channel = c.fetchone()
         
-        # Calculate Expiry (Example: 30 days default, Admin can logic this better if needed)
         now = datetime.datetime.now(IST)
         expiry_date = now + datetime.timedelta(days=30)
         expiry_str = expiry_date.strftime("%Y-%m-%d %H:%M")
         join_str = now.strftime("%Y-%m-%d")
 
-        # Add to Subscriptions
         c.execute("DELETE FROM subscriptions WHERE user_id=? AND channel_db_id=?", (user_id, chan_db_id))
         c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?)", 
                   (user_id, chan_db_id, join_str, expiry_str, channel[5]))
         conn.commit()
         conn.close()
 
-        # Generate Digital Bill
         user_info = await context.bot.get_chat(user_id)
         bill_text = (
             f"🧾 **PAYMENT ACCEPTED & DIGITAL BILL**\n"
@@ -305,7 +438,6 @@ async def add_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 2. Add Channel
 async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Fetch categories to show ID
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT * FROM categories")
@@ -351,7 +483,7 @@ async def add_chan_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 3. Add Broadcast Channel
 async def add_bc_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.reply_text("Enter Format: `Name|ChatID` (e.g. My Channel|-100123456)")
-    return 1 # Reuse a simple state or define new
+    return 1
 
 async def add_bc_chan_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -382,7 +514,6 @@ async def broadcast_type_handler(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['bd_type'] = query.data
     
     if query.data == 'bd_type_chan':
-        # Show list of channels
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT * FROM broadcast_channels")
@@ -392,7 +523,6 @@ async def broadcast_type_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text("No broadcast channels set.")
             return ConversationHandler.END
         
-        # Simple selection: Ask user to type ID (simplification for script length)
         txt = "Available Channels:\n" + "\n".join([f"ID: {c[0]} | Name: {c[1]}" for c in chans])
         await query.message.reply_text(f"{txt}\n\nEnter the ID of the channel to broadcast to:")
         return BROADCAST_TARGETS
@@ -406,7 +536,6 @@ async def broadcast_target_save(update: Update, context: ContextTypes.DEFAULT_TY
     return BROADCAST_CONTENT
 
 async def broadcast_content_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Store message ID and Chat ID to copy later
     context.user_data['bd_msg_id'] = update.message.message_id
     context.user_data['bd_from_chat'] = update.message.chat_id
     
@@ -416,11 +545,9 @@ async def broadcast_content_save(update: Update, context: ContextTypes.DEFAULT_T
 async def broadcast_schedule_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = update.message.text
     try:
-        # Parse Time
         local_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M")
         local_dt = IST.localize(local_dt)
         
-        # Schedule Job
         context.job_queue.run_once(
             perform_broadcast, 
             local_dt, 
@@ -444,7 +571,7 @@ async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
         if bd_type == 'bd_type_bot':
             conn = get_db()
             c = conn.cursor()
-            c.execute("SELECT DISTINCT user_id FROM subscriptions") # Assuming users in sub table
+            c.execute("SELECT DISTINCT user_id FROM subscriptions") 
             users = c.fetchall()
             conn.close()
             for u in users:
@@ -467,56 +594,45 @@ async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
 # --- EXPIRY CHECKER SYSTEM ---
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
-    """Run periodically to kick expired members"""
     conn = get_db()
     c = conn.cursor()
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
     
-    # Select expired subs
     c.execute("SELECT user_id, channel_chat_id, rowid FROM subscriptions WHERE expiry_date < ?", (now_str,))
     expired = c.fetchall()
     
     for item in expired:
         user_id, chat_id, row_id = item
         try:
-            # Kick User
             await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-            await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id) # Unban so they can rejoin if they pay again
-            
-            # Notify User
-            await context.bot.send_message(user_id, "⚠️ **Membership Expired**\nYour subscription has ended and you have been removed from the channel.")
-            
-            # Remove from DB
+            await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id) 
+            await context.bot.send_message(user_id, "⚠️ **Membership Expired**\nYour subscription has ended.")
             c.execute("DELETE FROM subscriptions WHERE rowid=?", (row_id,))
             conn.commit()
-        except BadRequest as e:
-            logger.error(f"Failed to kick user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error processing expiry: {e}")
-    
     conn.close()
 
 # --- MAIN SETUP ---
 
 def main():
-    # Start Dummy Web Server for Port 8080 (For hosting health checks)
     threading.Thread(target=start_web_server, daemon=True).start()
 
     application = Application.builder().token(TOKEN).build()
     
-    # Job Queue for Auto-Kick and Broadcasts
     job_queue = application.job_queue
-    # Run expiry check every hour
     job_queue.run_repeating(check_expiry_job, interval=3600, first=10)
 
-    # Conversation: Add Category
+    # --- HANDLERS ---
+
+    # 1. Add Category
     cat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
         states={ADD_CAT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_cat_save)]},
         fallbacks=[]
     )
 
-    # Conversation: Add Channel
+    # 2. Add Channel
     chan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_chan_start, pattern='admin_add_chan')],
         states={
@@ -529,14 +645,14 @@ def main():
         fallbacks=[]
     )
     
-    # Conversation: User Payment
+    # 3. User Payment
     pay_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(request_screenshot, pattern='req_upload_ss')],
         states={USER_UPLOAD_SCREENSHOT: [MessageHandler(filters.PHOTO, handle_screenshot)]},
         fallbacks=[]
     )
 
-    # Conversation: Broadcast
+    # 4. Broadcast
     bd_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_menu, pattern='admin_broadcast')],
         states={
@@ -548,10 +664,20 @@ def main():
         fallbacks=[]
     )
     
-    # Conversation: Add Broadcast Channel
+    # 5. Add Broadcast Channel
     bc_chan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_bc_chan_start, pattern='admin_add_bc_chan')],
         states={1: [MessageHandler(filters.TEXT, add_bc_chan_save)]},
+        fallbacks=[]
+    )
+
+    # 6. Set Payment Info (NEW)
+    set_pay_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(set_pay_start, pattern='admin_set_pay')],
+        states={
+            SET_UPI: [MessageHandler(filters.TEXT, set_pay_upi)],
+            SET_PAYPAL: [MessageHandler(filters.TEXT, set_pay_paypal)],
+        },
         fallbacks=[]
     )
 
@@ -561,11 +687,20 @@ def main():
     application.add_handler(pay_conv)
     application.add_handler(bd_conv)
     application.add_handler(bc_chan_conv)
+    application.add_handler(set_pay_conv)
     
     # Callback Handlers
     application.add_handler(CallbackQueryHandler(user_show_channels, pattern='^view_cat_'))
     application.add_handler(CallbackQueryHandler(show_payment_options, pattern='^buy_'))
     application.add_handler(CallbackQueryHandler(admin_decision, pattern='^(appr|rej)_'))
+    
+    # New Admin Features
+    application.add_handler(CallbackQueryHandler(admin_stats, pattern='admin_stats'))
+    application.add_handler(CallbackQueryHandler(admin_manage_expire, pattern='admin_manage_expire'))
+    application.add_handler(CallbackQueryHandler(admin_delete_menu, pattern='admin_delete_menu'))
+    application.add_handler(CallbackQueryHandler(delete_item_selector, pattern='^(del_menu|del_reset)'))
+    application.add_handler(CallbackQueryHandler(perform_delete, pattern='^perform_del'))
+    
     application.add_handler(CallbackQueryHandler(start, pattern='user_home'))
 
     print("Bot is running...")
