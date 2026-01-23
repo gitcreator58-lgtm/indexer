@@ -47,7 +47,7 @@ def start_web_server():
 (
     ADD_CAT_NAME,
     ADD_CHAN_CAT, ADD_CHAN_NAME, ADD_CHAN_LINK, ADD_CHAN_PRICE, ADD_CHAN_DURATION, ADD_CHAN_GROUP_ID,
-    PAY_CHOOSE, PAY_INPUT_UPI, PAY_INPUT_PAYPAL, # New Payment States
+    PAY_CHOOSE, PAY_INPUT_UPI, PAY_INPUT_PAYPAL,
     BROADCAST_SELECT_TYPE, BROADCAST_CONTENT, BROADCAST_DATETIME, BROADCAST_TARGETS,
     USER_UPLOAD_SCREENSHOT,
     USER_CHAT_MODE,
@@ -96,8 +96,7 @@ def save_user(user_id):
     conn.commit()
     conn.close()
 
-# --- START & ADMIN DASHBOARD ---
-
+# --- START ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user.id) 
@@ -114,7 +113,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("🗑 Manage / Delete Data", callback_data='admin_delete_menu')]
         ]
         text = "👑 **Admin Dashboard**\nSelect an option to customize your bot.\n\n🤖 **BOT created by RETOUCH**"
-        
         if update.callback_query:
             await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         else:
@@ -137,7 +135,7 @@ async def add_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Category '{name}' added.")
     return ConversationHandler.END
 
-# --- 2. ADD CHANNEL (FIXED ID ISSUE) ---
+# --- 2. ADD CHANNEL ---
 async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
@@ -156,11 +154,10 @@ async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_chan_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_input = update.message.text
     if not text_input.isdigit():
-        await update.message.reply_text("❌ Invalid ID. Please enter the **Number** only (e.g. 1). Try again:")
+        await update.message.reply_text("❌ Invalid ID. Number only.")
         return ADD_CHAN_CAT
-        
     context.user_data['new_chan_cat'] = int(text_input)
-    await update.message.reply_text("Enter Channel Display Name (e.g. VIP Plan):")
+    await update.message.reply_text("Enter Channel Name (e.g. VIP Plan):")
     return ADD_CHAN_NAME
 
 async def add_chan_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -175,17 +172,16 @@ async def add_chan_link_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def add_chan_price_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_chan_price'] = update.message.text
-    await update.message.reply_text("Enter **Duration in Days** (e.g., 30 for 1 month, 365 for 1 year):")
+    await update.message.reply_text("Enter **Duration in Days** (e.g., 30):")
     return ADD_CHAN_DURATION
 
 async def add_chan_duration_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data['new_chan_duration'] = int(update.message.text)
     except ValueError:
-        await update.message.reply_text("❌ Please enter a valid number for days.")
+        await update.message.reply_text("❌ Number only.")
         return ADD_CHAN_DURATION
-        
-    await update.message.reply_text("Enter Channel/Group Telegram ID (e.g., -100123456789) for auto-kick:")
+    await update.message.reply_text("Enter Channel/Group Telegram ID (e.g., -100123...):")
     return ADD_CHAN_GROUP_ID
 
 async def add_chan_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -200,19 +196,19 @@ async def add_chan_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Channel/Plan added successfully.")
     return ConversationHandler.END
 
-# --- 3. SET PAYMENT INFO (NEW SEPARATE BUTTONS) ---
+# --- 3. SET PAYMENT INFO ---
 async def set_pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🇮🇳 Set UPI", callback_data='set_pay_upi_btn')],
         [InlineKeyboardButton("🅿️ Set PayPal", callback_data='set_pay_paypal_btn')],
         [InlineKeyboardButton("🔙 Back", callback_data='user_home')]
     ]
-    await update.callback_query.message.edit_text("💰 **Payment Settings**\nSelect which method you want to configure:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await update.callback_query.message.edit_text("💰 **Payment Settings**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     return PAY_CHOOSE
 
 async def set_pay_ask_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    await update.callback_query.message.reply_text("📝 Enter your **UPI ID**:")
+    await update.callback_query.message.reply_text("📝 Enter **UPI ID**:")
     return PAY_INPUT_UPI
 
 async def set_pay_save_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,7 +223,7 @@ async def set_pay_save_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def set_pay_ask_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    await update.callback_query.message.reply_text("📝 Enter your **PayPal Link**:")
+    await update.callback_query.message.reply_text("📝 Enter **PayPal Link**:")
     return PAY_INPUT_PAYPAL
 
 async def set_pay_save_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -240,20 +236,16 @@ async def set_pay_save_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("✅ PayPal Link Updated!")
     return ConversationHandler.END
 
-# --- 4. BROADCAST SYSTEM ---
+# --- 4. BROADCAST ---
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("To Bot Users", callback_data="bd_type_bot"),
-         InlineKeyboardButton("To Channels", callback_data="bd_type_chan")]
-    ]
-    await update.callback_query.message.reply_text("📣 Select Broadcast Type:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [[InlineKeyboardButton("To Bot Users", callback_data="bd_type_bot"), InlineKeyboardButton("To Channels", callback_data="bd_type_chan")]]
+    await update.callback_query.message.reply_text("📣 Select Type:", reply_markup=InlineKeyboardMarkup(keyboard))
     return BROADCAST_SELECT_TYPE
 
 async def broadcast_type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data['bd_type'] = query.data
-    
     if query.data == 'bd_type_chan':
         conn = get_db()
         c = conn.cursor()
@@ -261,24 +253,24 @@ async def broadcast_type_handler(update: Update, context: ContextTypes.DEFAULT_T
         chans = c.fetchall()
         conn.close()
         if not chans:
-            await query.message.reply_text("No broadcast channels set.")
+            await query.message.reply_text("No channels set.")
             return ConversationHandler.END
         txt = "Available Channels:\n" + "\n".join([f"ID: {c[0]} | Name: {c[1]}" for c in chans])
-        await query.message.reply_text(f"{txt}\n\nEnter the ID of the channel to broadcast to:")
+        await query.message.reply_text(f"{txt}\n\nEnter ID to broadcast to:")
         return BROADCAST_TARGETS
     else:
-        await query.message.reply_text("Enter the message/post (Text, Photo, or Video):")
+        await query.message.reply_text("Enter post (Text/Photo/Video):")
         return BROADCAST_CONTENT
 
 async def broadcast_target_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['bd_target_id'] = update.message.text
-    await update.message.reply_text("Enter the message/post (Text, Photo, or Video):")
+    await update.message.reply_text("Enter post (Text/Photo/Video):")
     return BROADCAST_CONTENT
 
 async def broadcast_content_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['bd_msg_id'] = update.message.message_id
     context.user_data['bd_from_chat'] = update.message.chat_id
-    await update.message.reply_text("Enter Schedule Date/Time (12-Hour Format)\nFormat: `YYYY-MM-DD HH:MM AM/PM`\nExample: `2026-01-25 02:30 PM`")
+    await update.message.reply_text("Enter Time (12-Hour): `2026-01-25 02:30 PM`")
     return BROADCAST_DATETIME
 
 async def broadcast_schedule_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -286,53 +278,36 @@ async def broadcast_schedule_final(update: Update, context: ContextTypes.DEFAULT
     try:
         local_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %I:%M %p")
         local_dt = IST.localize(local_dt)
-        
-        context.job_queue.run_once(
-            perform_broadcast, 
-            local_dt, 
-            data=context.user_data.copy(),
-            name=f"bd_{datetime.datetime.now()}"
-        )
-        await update.message.reply_text(f"✅ Broadcast scheduled for {date_str}")
+        context.job_queue.run_once(perform_broadcast, local_dt, data=context.user_data.copy(), name=f"bd_{datetime.datetime.now()}")
+        await update.message.reply_text(f"✅ Scheduled for {date_str}")
     except ValueError:
-        await update.message.reply_text("❌ Invalid Format. Use `2026-01-25 02:30 PM`")
+        await update.message.reply_text("❌ Invalid Format.")
         return BROADCAST_DATETIME
     return ConversationHandler.END
 
 async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     data = job.data
-    msg_id = data['bd_msg_id']
-    from_chat = data['bd_from_chat']
-    bd_type = data['bd_type']
-
     try:
         conn = get_db()
         c = conn.cursor()
-        
-        if bd_type == 'bd_type_bot':
+        if data['bd_type'] == 'bd_type_bot':
             c.execute("SELECT user_id FROM all_users")
             users = c.fetchall()
             for u in users:
-                try:
-                    await context.bot.copy_message(chat_id=u[0], from_chat_id=from_chat, message_id=msg_id)
-                except (Forbidden, BadRequest):
-                    pass 
-                    
-        elif bd_type == 'bd_type_chan':
-            target_db_id = data['bd_target_id']
-            c.execute("SELECT chat_id FROM broadcast_channels WHERE id=?", (target_db_id,))
+                try: await context.bot.copy_message(chat_id=u[0], from_chat_id=data['bd_from_chat'], message_id=data['bd_msg_id'])
+                except: pass
+        elif data['bd_type'] == 'bd_type_chan':
+            c.execute("SELECT chat_id FROM broadcast_channels WHERE id=?", (data['bd_target_id'],))
             res = c.fetchone()
-            if res:
-                await context.bot.copy_message(chat_id=res[0], from_chat_id=from_chat, message_id=msg_id)
-        
+            if res: await context.bot.copy_message(chat_id=res[0], from_chat_id=data['bd_from_chat'], message_id=data['bd_msg_id'])
         conn.close()
     except Exception as e:
-        logger.error(f"Broadcast failed: {e}")
+        logger.error(f"Broadcast error: {e}")
 
-# --- 5. ADD BROADCAST CHANNEL ---
+# --- 5. BROADCAST CHANNEL SETUP ---
 async def add_bc_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("Enter Format: `Name|ChatID` (e.g. News|-100123...)")
+    await update.callback_query.message.reply_text("Format: `Name|ChatID`")
     return 1
 
 async def add_bc_chan_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -343,112 +318,95 @@ async def add_bc_chan_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("INSERT INTO broadcast_channels (name, chat_id) VALUES (?, ?)", (name.strip(), chat_id.strip()))
         conn.commit()
         conn.close()
-        await update.message.reply_text("✅ Broadcast channel saved.")
+        await update.message.reply_text("✅ Saved.")
     except:
-        await update.message.reply_text("❌ Error. Use format: Name|ChatID")
+        await update.message.reply_text("❌ Error.")
     return ConversationHandler.END
 
-# --- 6. DELETE / MANAGE DATA ---
+# --- 6. DELETE DATA ---
 async def admin_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
+    kb = [
         [InlineKeyboardButton("🗑 Delete Categories", callback_data='del_menu_cats')],
         [InlineKeyboardButton("🗑 Delete Channels", callback_data='del_menu_chans')],
         [InlineKeyboardButton("🗑 Delete Broadcast Chans", callback_data='del_menu_bc')],
         [InlineKeyboardButton("🔄 Reset Payment Info", callback_data='del_reset_pay')],
-        [InlineKeyboardButton("🔙 Back to Admin", callback_data='user_home')]
+        [InlineKeyboardButton("🔙 Back", callback_data='user_home')]
     ]
-    await update.callback_query.message.edit_text("🗑 **Delete Manager**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await update.callback_query.message.edit_text("🗑 **Delete Manager**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def delete_item_selector(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     conn = get_db()
     c = conn.cursor()
-    keyboard = []
+    kb = []
     
     if data == 'del_menu_cats':
         c.execute("SELECT * FROM categories")
         rows = c.fetchall()
-        for r in rows:
-            keyboard.append([InlineKeyboardButton(f"❌ {r[1]}", callback_data=f"perform_del_cat_{r[0]}")])
-            
+        for r in rows: kb.append([InlineKeyboardButton(f"❌ {r[1]}", callback_data=f"perform_del_cat_{r[0]}")])
     elif data == 'del_menu_chans':
         c.execute("SELECT * FROM channels")
         rows = c.fetchall()
-        for r in rows:
-            keyboard.append([InlineKeyboardButton(f"❌ {r[2]}", callback_data=f"perform_del_chan_{r[0]}")])
-            
+        for r in rows: kb.append([InlineKeyboardButton(f"❌ {r[2]}", callback_data=f"perform_del_chan_{r[0]}")])
     elif data == 'del_menu_bc':
         c.execute("SELECT * FROM broadcast_channels")
         rows = c.fetchall()
-        for r in rows:
-            keyboard.append([InlineKeyboardButton(f"❌ {r[1]}", callback_data=f"perform_del_bc_{r[0]}")])
-            
+        for r in rows: kb.append([InlineKeyboardButton(f"❌ {r[1]}", callback_data=f"perform_del_bc_{r[0]}")])
     elif data == 'del_reset_pay':
         c.execute("UPDATE payment_settings SET upi_id='not_set', paypal_link='not_set' WHERE id=1")
         conn.commit()
         conn.close()
-        await query.answer("Payment info reset!", show_alert=True)
+        await query.answer("Reset!", show_alert=True)
         return
 
     conn.close()
-    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data='admin_delete_menu')])
-    await query.message.edit_text("Select item to delete:", reply_markup=InlineKeyboardMarkup(keyboard))
+    kb.append([InlineKeyboardButton("🔙 Back", callback_data='admin_delete_menu')])
+    await query.message.edit_text("Select item to delete:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     conn = get_db()
     c = conn.cursor()
-    
     try:
-        if data.startswith('perform_del_cat_'):
-            oid = int(data.split('_')[-1])
+        oid = int(data.split('_')[-1])
+        if 'cat' in data:
             c.execute("DELETE FROM categories WHERE id=?", (oid,))
             c.execute("DELETE FROM channels WHERE category_id=?", (oid,))
-            await query.answer("Deleted!", show_alert=True)
-            await delete_item_selector(update._replace(callback_query=query._replace(data='del_menu_cats')), context)
-            
-        elif data.startswith('perform_del_chan_'):
-            oid = int(data.split('_')[-1])
+            next_menu = 'del_menu_cats'
+        elif 'chan' in data:
             c.execute("DELETE FROM channels WHERE id=?", (oid,))
-            await query.answer("Deleted!", show_alert=True)
-            await delete_item_selector(update._replace(callback_query=query._replace(data='del_menu_chans')), context)
-            
-        elif data.startswith('perform_del_bc_'):
-            oid = int(data.split('_')[-1])
+            next_menu = 'del_menu_chans'
+        elif 'bc' in data:
             c.execute("DELETE FROM broadcast_channels WHERE id=?", (oid,))
-            await query.answer("Deleted!", show_alert=True)
-            await delete_item_selector(update._replace(callback_query=query._replace(data='del_menu_bc')), context)
-            
+            next_menu = 'del_menu_bc'
+        
         conn.commit()
+        await query.answer("Deleted!", show_alert=True)
+        await delete_item_selector(update._replace(callback_query=query._replace(data=next_menu)), context)
     finally:
         conn.close()
 
-# --- 7. EXPIRY SYSTEM ---
+# --- 7. EXPIRY ---
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("Running expiry check...", show_alert=True)
+    await update.callback_query.answer("Checking...", show_alert=True)
     await check_expiry_job(context)
-    await update.callback_query.message.reply_text("✅ Expiry Check Done.")
+    await update.callback_query.message.reply_text("✅ Check Done.")
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-    
     c.execute("SELECT user_id, channel_chat_id, rowid FROM subscriptions WHERE expiry_date < ?", (now_str,))
-    expired = c.fetchall()
-    
-    for item in expired:
-        user_id, chat_id, row_id = item
+    for item in c.fetchall():
         try:
-            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-            await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
-            await context.bot.send_message(user_id, "⚠️ **Membership Expired**")
-            c.execute("DELETE FROM subscriptions WHERE rowid=?", (row_id,))
+            await context.bot.ban_chat_member(item[1], item[0])
+            await context.bot.unban_chat_member(item[1], item[0])
+            await context.bot.send_message(item[0], "⚠️ Membership Expired.")
+            c.execute("DELETE FROM subscriptions WHERE rowid=?", (item[2],))
             conn.commit()
-        except Exception:
-            pass
+        except: pass
     conn.close()
 
 # --- 8. STATS ---
@@ -462,33 +420,29 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT count(*) FROM all_users")
     users = c.fetchone()[0]
     conn.close()
-    text = f"📊 **Stats**\n📂 Categories: {cats}\n📺 Plans: {chans}\n👥 Total Users: {users}"
-    await update.callback_query.message.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
+    await update.callback_query.message.edit_text(f"📊 **Stats**\nCats: {cats}\nPlans: {chans}\nUsers: {users}", parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
 
-# --- 9. USER CHAT ---
+# --- 9. CHAT ---
 async def user_start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("❌ End Chat", callback_data='end_chat_mode')]]
-    await query.message.edit_text("💬 **Chat with Admin**\nAllowed: Text & Photos Only.", reply_markup=InlineKeyboardMarkup(keyboard))
+    kb = [[InlineKeyboardButton("❌ End Chat", callback_data='end_chat_mode')]]
+    await query.message.edit_text("💬 **Chat with Admin**\nAllowed: Text & Photos.", reply_markup=InlineKeyboardMarkup(kb))
     return USER_CHAT_MODE
 
 async def user_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     msg = update.message
-    
-    if msg.video or msg.animation or msg.document or msg.sticker:
-        await msg.reply_text("❌ Videos/GIFs not allowed.")
+    if msg.video or msg.animation or msg.document:
+        await msg.reply_text("❌ No Videos/GIFs.")
         return USER_CHAT_MODE
-
     kb = [[InlineKeyboardButton("↩️ Reply", callback_data=f"adm_reply_{user.id}"), InlineKeyboardButton("❌ End Chat", callback_data="adm_end_chat")]]
-    await context.bot.copy_message(chat_id=ADMIN_ID, from_chat_id=user.id, message_id=msg.message_id, caption=msg.caption, reply_markup=InlineKeyboardMarkup(kb))
+    await context.bot.copy_message(ADMIN_ID, user.id, msg.message_id, caption=msg.caption, reply_markup=InlineKeyboardMarkup(kb))
     await msg.reply_text("✅ Sent.")
     return USER_CHAT_MODE
 
 async def user_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    await update.callback_query.answer()
     await user_show_categories(update, context)
     return ConversationHandler.END
 
@@ -505,17 +459,16 @@ async def admin_start_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = context.user_data.get('reply_target')
     if target:
-        await context.bot.copy_message(chat_id=target, from_chat_id=ADMIN_ID, message_id=update.message.message_id)
+        await context.bot.copy_message(target, ADMIN_ID, update.message.message_id)
         await update.message.reply_text("✅ Sent.")
     return ADMIN_REPLY_MODE
 
 async def admin_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer("Chat Ended")
-    await start(update, context) 
+    await update.callback_query.answer("Chat Ended")
+    await start(update, context)
     return ConversationHandler.END
 
-# --- USER STORE FLOW (FIXED) ---
+# --- USER STORE ---
 async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
@@ -523,15 +476,11 @@ async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYP
     cats = c.fetchall()
     conn.close()
     kb = []
-    for cat in cats:
-        kb.append([InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}")])
+    for cat in cats: kb.append([InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}")])
     kb.append([InlineKeyboardButton("📞 Chat with Admin", callback_data="start_user_chat")])
-    
     text = "👋 Welcome! Select a category:\n\n🤖 **BOT created by RETOUCH**"
-    if update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    if update.callback_query: await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def user_show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -543,35 +492,48 @@ async def user_show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chans = c.fetchall()
     conn.close()
     kb = []
-    for chan in chans:
-        kb.append([InlineKeyboardButton(f"{chan[2]} - {chan[4]}", callback_data=f"buy_{chan[0]}")])
+    for chan in chans: kb.append([InlineKeyboardButton(f"{chan[2]} - {chan[4]}", callback_data=f"buy_{chan[0]}")])
     kb.append([InlineKeyboardButton("🔙 Back", callback_data="user_home")])
     await query.message.edit_text("👇 Select a plan to join:", reply_markup=InlineKeyboardMarkup(kb))
 
-# --- PAYMENT ---
+# --- PAYMENT & INVOICE ---
 async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chan_id = int(query.data.split('_')[1])
     context.user_data['selected_channel_id'] = chan_id
+    
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT upi_id, paypal_link FROM payment_settings")
     sets = c.fetchone()
-    c.execute("SELECT name, price FROM channels WHERE id=?", (chan_id,))
+    c.execute("SELECT name, price, duration FROM channels WHERE id=?", (chan_id,))
     info = c.fetchone()
     conn.close()
-    text = f"💳 **Plan:** {info[0]}\n**Price:** {info[1]}\n\nUPI: `{sets[0]}`\nPayPal: {sets[1]}"
+    
+    payment_txt = ""
+    if sets[0] != 'not_set': payment_txt += f"🇮🇳 **UPI ID:** `{sets[0]}`\n\n"
+    if sets[1] != 'not_set': payment_txt += f"🅿️ **PayPal:** {sets[1]}\n\n"
+    
+    if not payment_txt: payment_txt = "⚠️ No payment methods available. Contact Admin."
+
+    text = (f"💳 **Payment Gateway**\n\n"
+            f"📦 **Plan:** {info[0]}\n"
+            f"💸 **Price:** {info[1]}\n"
+            f"⏳ **Duration:** {info[2]} Days\n\n"
+            f"{payment_txt}"
+            f"📸 **Step 2:** Pay amount & Upload Screenshot.")
+            
     kb = [[InlineKeyboardButton("📸 Upload Screenshot", callback_data="req_upload_ss")], [InlineKeyboardButton("🔙 Cancel", callback_data="user_home")]]
     await query.message.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
 
 async def request_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("📤 Send screenshot now.")
+    await update.callback_query.message.reply_text("📤 **Please send your payment screenshot now.**")
     return USER_UPLOAD_SCREENSHOT
 
 async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("Photo only.")
+        await update.message.reply_text("❌ Please send a photo.")
         return USER_UPLOAD_SCREENSHOT
     
     user = update.effective_user
@@ -584,9 +546,19 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = c.fetchone()
     conn.close()
     
+    # Notify Admin
+    now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %I:%M %p")
+    caption = (f"🔔 **New Payment Verification**\n\n"
+               f"👤 **User:** {user.first_name} (@{user.username})\n"
+               f"🆔 **ID:** `{user.id}`\n"
+               f"📦 **Plan:** {info[0]}\n"
+               f"💸 **Price:** {info[1]}\n"
+               f"🕒 **Time:** {now_str}")
+               
     kb = [[InlineKeyboardButton("✅ Accept", callback_data=f"appr_{user.id}_{chan_id}"), InlineKeyboardButton("❌ Reject", callback_data=f"rej_{user.id}")]]
-    await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, caption=f"User: {user.first_name}\nPlan: {info[0]}", reply_markup=InlineKeyboardMarkup(kb))
-    await update.message.reply_text("✅ Sent to Admin.")
+    await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, caption=caption, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
+    
+    await update.message.reply_text("✅ Screenshot sent to Admin for verification. Please wait.")
     return ConversationHandler.END
 
 async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -597,26 +569,57 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = int(data[1])
     
     if action == 'rej':
-        await context.bot.send_message(uid, "❌ Payment Rejected.")
-        await query.message.edit_caption("🔴 REJECTED")
+        await context.bot.send_message(uid, "❌ **Payment Rejected.**\nPlease contact admin if this is a mistake.")
+        await query.message.edit_caption(query.message.caption + "\n\n🔴 **REJECTED**")
+    
     elif action == 'appr':
         cid = int(data[2])
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT * FROM channels WHERE id=?", (cid,))
-        chan = c.fetchone() 
+        chan = c.fetchone() # id, cat, name, link, price, chat_id, duration
         
-        duration_days = chan[6]
+        # Calculate Dates
         now = datetime.datetime.now(IST)
-        exp = now + datetime.timedelta(days=duration_days)
-        exp_str = exp.strftime("%Y-%m-%d %H:%M")
+        duration_days = chan[6]
+        expiry = now + datetime.timedelta(days=duration_days)
         
-        c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?)", (uid, cid, now.strftime("%Y-%m-%d"), exp_str, chan[5]))
+        join_date = now.strftime("%Y-%m-%d")
+        join_time = now.strftime("%I:%M %p")
+        expiry_str = expiry.strftime("%Y-%m-%d")
+        purchase_year = now.year
+        
+        # Add to DB
+        c.execute("DELETE FROM subscriptions WHERE user_id=? AND channel_db_id=?", (uid, cid))
+        c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?)", 
+                  (uid, cid, join_date, expiry.strftime("%Y-%m-%d %H:%M"), chan[5]))
         conn.commit()
         conn.close()
         
-        await context.bot.send_message(uid, f"✅ Accepted!\nPlan: {chan[2]}\nExpires: {exp_str}\n\nLink: {chan[3]}")
-        await query.message.edit_caption("🟢 ACCEPTED")
+        # 1. Happy Message
+        user_info = await context.bot.get_chat(uid)
+        happy_msg = (f"🎉 **Payment Accepted!**\n\n"
+                     f"Congratulations! You have successfully joined **{chan[2]}**.\n\n"
+                     f"🔗 **JOIN LINK:** {chan[3]}")
+        await context.bot.send_message(uid, happy_msg, parse_mode='Markdown')
+        
+        # 2. Digital Invoice
+        invoice = (f"🧾 **DIGITAL INVOICE**\n"
+                   f"━━━━━━━━━━━━━━━━━━━\n"
+                   f"📅 **Date:** {join_date}\n"
+                   f"🕒 **Time:** {join_time}\n"
+                   f"👤 **Member:** {user_info.first_name}\n"
+                   f"🆔 **User ID:** `{uid}`\n"
+                   f"━━━━━━━━━━━━━━━━━━━\n"
+                   f"📦 **Plan:** {chan[2]}\n"
+                   f"⏳ **Duration:** {duration_days} Days\n"
+                   f"🗓 **Expiry:** {expiry_str}\n"
+                   f"📅 **Year:** {purchase_year}\n"
+                   f"━━━━━━━━━━━━━━━━━━━\n"
+                   f"✅ **Status:** PAID")
+                   
+        await context.bot.send_message(uid, invoice, parse_mode='Markdown')
+        await query.message.edit_caption(query.message.caption + "\n\n🟢 **ACCEPTED**")
 
 # --- MAIN ---
 def main():
@@ -643,7 +646,6 @@ def main():
         },
         fallbacks=[], allow_reentry=True))
 
-    # Updated Payment Conversation
     application.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(set_pay_menu, pattern='admin_set_pay')],
         states={
@@ -681,9 +683,8 @@ def main():
         states={ADMIN_REPLY_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, admin_send_reply)]},
         fallbacks=[CallbackQueryHandler(admin_end_chat, pattern='adm_end_chat')], allow_reentry=True))
     
-    application.add_handler(CallbackQueryHandler(pay_conv_entry, pattern='req_upload_ss')) 
     pay_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(request_screenshot, pattern='req_upload_ss')],
+        entry_points=[CallbackQueryHandler(pay_conv_entry, pattern='req_upload_ss')],
         states={USER_UPLOAD_SCREENSHOT: [MessageHandler(filters.PHOTO, handle_screenshot)]},
         fallbacks=[], allow_reentry=True
     )
