@@ -10,12 +10,9 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("BOT_TOKEN")
-# Get the external URL of your app (Render provides this automatically)
-# If running locally, you might need to use 'http://localhost:8080'
 APP_URL = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8080")
 
-# In-memory storage for generated links (restarts will clear this)
-# Structure: { "uuid": "direct_video_url" }
+# In-memory storage
 STORED_VIDEOS = {}
 
 if not TOKEN:
@@ -32,55 +29,64 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urlparse(self.path)
         
-        # 1. Health Check Route (for Render)
+        # 1. Health Check
         if parsed_path.path == "/":
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'Bot is running and ready to stream!')
+            self.wfile.write(b'Bot is running.')
             return
 
-        # 2. Watch Route (e.g. /watch?id=12345)
+        # 2. Watch Route
         if parsed_path.path == "/watch":
             query_params = parse_qs(parsed_path.query)
             video_id = query_params.get('id', [None])[0]
 
             if video_id and video_id in STORED_VIDEOS:
-                direct_url = STORED_VIDEOS[video_id]
+                video_data = STORED_VIDEOS[video_id]
+                direct_url = video_data['url']
+                referer = video_data.get('referer', '') # Get original referer if needed
+
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')
                 self.end_headers()
                 
-                # HTML Template with HLS.js support for streaming links
+                # HTML with HLS.js and Custom Headers logic (simulated)
                 html_content = f"""
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>Video Stream</title>
+                    <title>Stream Player</title>
                     <meta name="viewport" content="width=device-width, initial-scale=1">
                     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
                     <style>
-                        body {{ margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }}
-                        video {{ width: 100%; max-width: 1000px; height: auto; max-height: 100vh; }}
-                        .btn {{ position: fixed; top: 20px; left: 20px; padding: 10px 20px; background: #fff; text-decoration: none; color: #000; border-radius: 5px; font-family: sans-serif; opacity: 0.7; }}
+                        body {{ margin: 0; background: #000; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; color: #fff; font-family: sans-serif; }}
+                        video {{ width: 100%; max-width: 1000px; height: auto; max-height: 80vh; box-shadow: 0 0 20px rgba(255,255,255,0.1); }}
+                        .btn-container {{ margin-bottom: 20px; }}
+                        .btn {{ padding: 10px 20px; background: #2196F3; text-decoration: none; color: #fff; border-radius: 5px; margin: 0 10px; }}
                     </style>
                 </head>
                 <body>
-                    <a href="{direct_url}" class="btn">Download Raw File</a>
-                    <video id="video" controls autoplay></video>
+                    <div class="btn-container">
+                        <a href="{direct_url}" class="btn">Download / Direct Link</a>
+                    </div>
+                    <video id="video" controls autoplay playsinline></video>
                     <script>
                         var video = document.getElementById('video');
                         var videoSrc = "{direct_url}";
                         
-                        // Check if it's HLS (m3u8) or standard MP4
                         if (Hls.isSupported() && (videoSrc.includes('.m3u8') || !videoSrc.includes('.mp4'))) {{
                             var hls = new Hls();
                             hls.loadSource(videoSrc);
                             hls.attachMedia(video);
+                            hls.on(Hls.Events.MANIFEST_PARSED, function() {{
+                                video.play();
+                            }});
                         }} else if (video.canPlayType('application/vnd.apple.mpegurl')) {{
-                            // Native HLS support (Safari)
                             video.src = videoSrc;
+                            video.addEventListener('loadedmetadata', function() {{
+                                video.play();
+                            }});
                         }} else {{
-                            // Standard MP4
                             video.src = videoSrc;
                         }}
                     </script>
@@ -96,7 +102,6 @@ class StreamingRequestHandler(BaseHTTPRequestHandler):
 
 def start_web_server():
     port = int(os.environ.get('PORT', 8080))
-    # ThreadingHTTPServer handles multiple requests better, but HTTPServer is standard
     server = HTTPServer(('0.0.0.0', port), StreamingRequestHandler)
     logging.info(f"Web server running on port {port}")
     server.serve_forever()
@@ -109,61 +114,56 @@ async def convert_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Please send a valid HTTP/HTTPS link.")
         return
 
-    status_msg = await update.message.reply_text(f"🔍 **Analyzing:** {user_url}\n⏳ Please wait...", parse_mode='Markdown')
+    status_msg = await update.message.reply_text(f"🔍 **Analyzing:** {user_url}\nAttempting to bypass protections...", parse_mode='Markdown')
 
     try:
-        # Options to grab the direct stream URL
+        # --- NEW ROBUST OPTIONS ---
         ydl_opts = {
             'format': 'best', 
             'quiet': True,
             'noplaylist': True,
-            # Force generic extractor if specific one fails, useful for unknown streaming sites
-            'force_generic_extractor': False 
+            'nocheckcertificate': True, # Bypass SSL errors
+            'geo_bypass': True,         # Try to bypass geo-restrictions
+            # 1. Fake User Agent (Looks like Chrome on Windows)
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            # 2. Pass Referer (Some sites check this)
+            'http_headers': {
+                'Referer': user_url
+            }
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract info
             info = ydl.extract_info(user_url, download=False)
             
             direct_url = info.get('url', None)
             title = info.get('title', 'Unknown Title')
             
             if direct_url:
-                # 1. Generate a unique ID for this video
-                unique_id = str(uuid.uuid4())[:8] # Short 8-char ID
+                unique_id = str(uuid.uuid4())[:8]
                 
-                # 2. Store the direct link in our memory
-                STORED_VIDEOS[unique_id] = direct_url
+                # Store URL AND the referer (original link)
+                STORED_VIDEOS[unique_id] = {
+                    'url': direct_url,
+                    'referer': user_url
+                }
                 
-                # 3. Create the HTML link pointing to OUR bot's server
-                # Ensure APP_URL doesn't have a trailing slash
                 base_url = APP_URL.rstrip('/')
                 watch_link = f"{base_url}/watch?id={unique_id}"
 
                 message = (
-                    f"✅ **Stream Converted!**\n\n"
+                    f"✅ **Stream Ready!**\n\n"
                     f"🎬 **Title:** {title}\n"
-                    f"🔗 **HTML Stream Link:**\n{watch_link}\n\n"
-                    f"_(Click the link above to watch in browser)_"
+                    f"🔗 **Watch Online:**\n{watch_link}\n\n"
+                    f"_(Link valid until bot restarts)_"
                 )
-                
-                # Edit the previous "Please wait" message
                 await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=status_msg.message_id, text=message, parse_mode='Markdown')
             else:
-                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=status_msg.message_id, text="❌ Could not extract a stream URL.")
+                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=status_msg.message_id, text="❌ Extractor found no video URL.")
 
     except Exception as e:
-        logging.error(f"Error: {e}")
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=status_msg.message_id, text="❌ Failed. The link might be protected or unsupported.")
-
-if __name__ == '__main__':
-    # 1. Start Web Server
-    threading.Thread(target=start_web_server, daemon=True).start()
-
-    # 2. Start Bot
-    application = ApplicationBuilder().token(TOKEN).build()
-    link_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), convert_link)
-    application.add_handler(link_handler)
-
-    print("Bot is running...")
-    application.run_polling()
+        # Error Printing enabled for debugging
+        error_text = str(e)
+        logging.error(f"Error: {error_text}")
+        
+        # User-friendly error message
+        
