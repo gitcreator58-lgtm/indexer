@@ -1,21 +1,18 @@
+# Use an official lightweight Python image
 FROM python:3.10-slim
 
+# Set the working directory in the container
 WORKDIR /app
 
-# Install ffmpeg (needed for yt-dlp)
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
+# Copy the requirements file and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py .
+# Copy the rest of the application code
+COPY . .
 
-# Tell Docker that the container listens on this port
+# Expose Port 8080 (Matches the port in your Python script)
 EXPOSE 8080
 
-# Set default environment variable for PORT
-ENV PORT=8080
-
-CMD ["python", "bot.py"]
+# Command to run the bot
+CMD ["python", "main.py"]
