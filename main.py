@@ -20,9 +20,9 @@ from telegram.error import BadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- CONFIGURATION ---
-# ⚠️ THIS NOW READS FROM RENDER ENVIRONMENT VARIABLES
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
-ADMIN_ID = 123456789                  # <--- REPLACE WITH YOUR NUMERIC ID
+# ⚠️ ACTION REQUIRED: PASTE YOUR REAL DATA BELOW ⚠️
+TOKEN = '8501324652:AAEE84y5ZCnkWjMayqvL9w3OB1tFaAHf6oY'  # <--- DELETE THIS TEXT AND PASTE YOUR TOKEN
+ADMIN_ID = 8072674531                 # <--- DELETE THIS NUMBER AND TYPE YOUR ADMIN ID
 IST = pytz.timezone('Asia/Kolkata')
 PORT = 8080
 
