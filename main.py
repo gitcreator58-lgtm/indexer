@@ -49,8 +49,10 @@ def start_web_server():
     ADD_CHAN_CAT, ADD_CHAN_NAME, ADD_CHAN_LINK, ADD_CHAN_PRICE, ADD_CHAN_GROUP_ID,
     SET_UPI, SET_PAYPAL,
     BROADCAST_SELECT_TYPE, BROADCAST_CONTENT, BROADCAST_DATETIME, BROADCAST_TARGETS,
-    USER_UPLOAD_SCREENSHOT
-) = range(13)
+    USER_UPLOAD_SCREENSHOT,
+    USER_CHAT_MODE, # New state for user chatting
+    ADMIN_REPLY_MODE # New state for admin replying
+) = range(15)
 
 # --- DATABASE SETUP ---
 def setup_db():
@@ -129,9 +131,7 @@ async def set_pay_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     conn = get_db()
     c = conn.cursor()
-    # Update row 1
     c.execute("UPDATE payment_settings SET upi_id=?, paypal_link=? WHERE id=?", (new_upi, new_paypal, 1))
-    # Or insert if missing (though setup_db handles this)
     if c.rowcount == 0:
          c.execute("INSERT INTO payment_settings (upi_id, paypal_link) VALUES (?, ?)", (new_upi, new_paypal))
     conn.commit()
@@ -140,7 +140,7 @@ async def set_pay_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ **Payment Details Updated Successfully!**")
     return ConversationHandler.END
 
-# --- ADMIN: VIEW STATS (FIXED) ---
+# --- ADMIN: VIEW STATS ---
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
@@ -164,14 +164,14 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.edit_text(text, parse_mode='Markdown', 
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
 
-# --- ADMIN: MANAGE EXPIRED (FIXED) ---
+# --- ADMIN: MANAGE EXPIRED ---
 
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Running expiry check...", show_alert=True)
-    await check_expiry_job(context) # Run the logic manually
+    await check_expiry_job(context) 
     await update.callback_query.message.reply_text("✅ **Expiry Check Completed.**\nUsers with expired memberships have been kicked.")
 
-# --- ADMIN: DELETE MENU (NEW FEATURE) ---
+# --- ADMIN: DELETE MENU ---
 
 async def admin_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -236,7 +236,7 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data.startswith('perform_del_cat_'):
             oid = int(data.split('_')[-1])
             c.execute("DELETE FROM categories WHERE id=?", (oid,))
-            c.execute("DELETE FROM channels WHERE category_id=?", (oid,)) # Cleanup channels in that cat
+            c.execute("DELETE FROM channels WHERE category_id=?", (oid,))
             await query.answer("Category Deleted!", show_alert=True)
             await delete_item_selector(update._replace(callback_query=query._replace(data='del_menu_cats')), context)
             
@@ -258,6 +258,96 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
+# --- CHAT WITH ADMIN FEATURE (NEW) ---
+
+async def user_start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [[InlineKeyboardButton("❌ End Chat", callback_data='end_chat_mode')]]
+    await query.message.edit_text(
+        "💬 **Chat with Admin**\n\n"
+        "You are now connected directly to the Admin.\n"
+        "✅ **Allowed:** Text Messages, Photos\n"
+        "❌ **Not Allowed:** Videos, GIFs\n\n"
+        "Type your message or send a photo below:",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return USER_CHAT_MODE
+
+async def user_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    msg = update.message
+    
+    # Check restrictions
+    if msg.video or msg.animation or msg.document or msg.sticker:
+        await msg.reply_text("❌ **Restriction:** Videos, GIFs, and Files are NOT allowed. Only Text and Photos.")
+        return USER_CHAT_MODE
+
+    # Prepare forwarding to Admin
+    # We attach a "Reply" button so Admin knows who to reply to
+    admin_keyboard = [[InlineKeyboardButton("↩️ Reply to User", callback_data=f"adm_reply_{user.id}")]]
+    
+    try:
+        await context.bot.copy_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=user.id,
+            message_id=msg.message_id,
+            caption=msg.caption if msg.caption else None,
+            reply_markup=InlineKeyboardMarkup(admin_keyboard)
+        )
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"📩 **New Message from:** {user.first_name} (@{user.username})\nID: `{user.id}`", parse_mode='Markdown')
+        
+        # Confirm to user
+        await msg.reply_text("✅ Message sent to Admin.")
+    except Exception as e:
+        await msg.reply_text(f"❌ Error sending message: {e}")
+    
+    return USER_CHAT_MODE
+
+async def user_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await user_show_categories(update, context) # Return to main menu
+    return ConversationHandler.END
+
+# --- ADMIN REPLY LOGIC ---
+
+async def admin_start_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract user ID from button data
+    target_user_id = int(query.data.split('_')[2])
+    context.user_data['reply_target_id'] = target_user_id
+    
+    await query.message.reply_text(f"✍️ **Replying to User ID:** `{target_user_id}`\n\nEnter your text message or send a photo:", parse_mode='Markdown')
+    return ADMIN_REPLY_MODE
+
+async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_id = context.user_data.get('reply_target_id')
+    msg = update.message
+    
+    if not target_id:
+        await msg.reply_text("❌ Error: Target user lost. Try clicking Reply again.")
+        return ConversationHandler.END
+        
+    try:
+        # Copy admin message to user
+        await context.bot.copy_message(
+            chat_id=target_id,
+            from_chat_id=ADMIN_ID,
+            message_id=msg.message_id,
+            caption=msg.caption
+        )
+        await context.bot.send_message(chat_id=target_id, text="🔔 **Reply from Admin**", parse_mode='Markdown')
+        await msg.reply_text("✅ Reply sent successfully.")
+    except Exception as e:
+        await msg.reply_text(f"❌ Failed to send: {e}")
+        
+    return ConversationHandler.END
+
 # --- USER FLOW: SHOW CATEGORIES & CHANNELS ---
 
 async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -270,6 +360,9 @@ async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = []
     for cat in cats:
         keyboard.append([InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}")])
+    
+    # Add Chat Button
+    keyboard.append([InlineKeyboardButton("📞 Chat with Admin", callback_data="start_user_chat")])
     
     text = "👋 Welcome! Please select a category to view our plans:\n\n🤖 **BOT created by RETOUCH**"
     
@@ -623,13 +716,14 @@ def main():
     job_queue = application.job_queue
     job_queue.run_repeating(check_expiry_job, interval=3600, first=10)
 
-    # --- HANDLERS ---
+    # --- HANDLERS (NOTE: ALLOW_REENTRY=TRUE FIXES BUTTON FREEZING) ---
 
     # 1. Add Category
     cat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
         states={ADD_CAT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_cat_save)]},
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True # FIXED: Prevents sticking
     )
 
     # 2. Add Channel
@@ -642,14 +736,16 @@ def main():
             ADD_CHAN_PRICE: [MessageHandler(filters.TEXT, add_chan_price_save)],
             ADD_CHAN_GROUP_ID: [MessageHandler(filters.TEXT, add_chan_final)],
         },
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True # FIXED
     )
     
     # 3. User Payment
     pay_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(request_screenshot, pattern='req_upload_ss')],
         states={USER_UPLOAD_SCREENSHOT: [MessageHandler(filters.PHOTO, handle_screenshot)]},
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True
     )
 
     # 4. Broadcast
@@ -661,24 +757,48 @@ def main():
             BROADCAST_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_content_save)],
             BROADCAST_DATETIME: [MessageHandler(filters.TEXT, broadcast_schedule_final)]
         },
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True # FIXED
     )
     
     # 5. Add Broadcast Channel
     bc_chan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_bc_chan_start, pattern='admin_add_bc_chan')],
         states={1: [MessageHandler(filters.TEXT, add_bc_chan_save)]},
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True # FIXED
     )
 
-    # 6. Set Payment Info (NEW)
+    # 6. Set Payment Info
     set_pay_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(set_pay_start, pattern='admin_set_pay')],
         states={
             SET_UPI: [MessageHandler(filters.TEXT, set_pay_upi)],
             SET_PAYPAL: [MessageHandler(filters.TEXT, set_pay_paypal)],
         },
-        fallbacks=[]
+        fallbacks=[],
+        allow_reentry=True # FIXED
+    )
+
+    # 7. User Chat (NEW FEATURE)
+    chat_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(user_start_chat, pattern='start_user_chat')],
+        states={
+            USER_CHAT_MODE: [
+                MessageHandler(filters.TEXT | filters.PHOTO, user_send_message),
+                MessageHandler(filters.VIDEO | filters.ANIMATION | filters.Document.ALL, user_send_message) # To catch and warn
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(user_end_chat, pattern='end_chat_mode')],
+        allow_reentry=True
+    )
+
+    # 8. Admin Reply
+    admin_reply_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_start_reply, pattern='^adm_reply_')],
+        states={ADMIN_REPLY_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, admin_send_reply)]},
+        fallbacks=[],
+        allow_reentry=True
     )
 
     application.add_handler(CommandHandler("start", start))
@@ -688,6 +808,8 @@ def main():
     application.add_handler(bd_conv)
     application.add_handler(bc_chan_conv)
     application.add_handler(set_pay_conv)
+    application.add_handler(chat_conv)
+    application.add_handler(admin_reply_conv)
     
     # Callback Handlers
     application.add_handler(CallbackQueryHandler(user_show_channels, pattern='^view_cat_'))
