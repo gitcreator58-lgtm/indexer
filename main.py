@@ -31,7 +31,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- WEB SERVER (Health Check) ---
+# --- WEB SERVER ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -47,12 +47,12 @@ def start_web_server():
 (
     ADD_CAT_NAME,
     ADD_CHAN_CAT, ADD_CHAN_NAME, ADD_CHAN_LINK, ADD_CHAN_PRICE, ADD_CHAN_DURATION, ADD_CHAN_GROUP_ID,
-    SET_UPI, SET_PAYPAL,
+    PAY_CHOOSE, PAY_INPUT_UPI, PAY_INPUT_PAYPAL, # New Payment States
     BROADCAST_SELECT_TYPE, BROADCAST_CONTENT, BROADCAST_DATETIME, BROADCAST_TARGETS,
     USER_UPLOAD_SCREENSHOT,
     USER_CHAT_MODE,
     ADMIN_REPLY_MODE
-) = range(16)
+) = range(17)
 
 # --- DATABASE SETUP ---
 def setup_db():
@@ -60,7 +60,6 @@ def setup_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS categories 
                  (id INTEGER PRIMARY KEY, name TEXT)''')
-    # Added 'duration' column
     c.execute('''CREATE TABLE IF NOT EXISTS channels 
                  (id INTEGER PRIMARY KEY, category_id INTEGER, name TEXT, 
                   invite_link TEXT, price TEXT, channel_id TEXT, duration INTEGER)''')
@@ -71,16 +70,13 @@ def setup_db():
                   expiry_date TEXT, channel_chat_id TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS broadcast_channels 
                  (id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT)''')
-    # Added 'all_users' to track everyone for broadcast
     c.execute('''CREATE TABLE IF NOT EXISTS all_users 
                  (user_id INTEGER PRIMARY KEY)''')
     
-    # Init settings
     c.execute("SELECT * FROM payment_settings")
     if not c.fetchone():
         c.execute("INSERT INTO payment_settings (upi_id, paypal_link) VALUES (?, ?)", 
-                  ("not_set@upi", "paypal.me/notset"))
-    
+                  ("not_set", "not_set"))
     conn.commit()
     conn.close()
 
@@ -100,11 +96,11 @@ def save_user(user_id):
     conn.commit()
     conn.close()
 
-# --- START & ADMIN MENU ---
+# --- START & ADMIN DASHBOARD ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    save_user(user.id) # Save every user for broadcast
+    save_user(user.id) 
 
     if is_admin(user.id):
         keyboard = [
@@ -141,7 +137,7 @@ async def add_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Category '{name}' added.")
     return ConversationHandler.END
 
-# --- 2. ADD CHANNEL (WITH DURATION) ---
+# --- 2. ADD CHANNEL (FIXED ID ISSUE) ---
 async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
@@ -154,11 +150,16 @@ async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     msg = "Available Categories:\n" + "\n".join([f"ID: {c[0]} | Name: {c[1]}" for c in cats])
-    await update.callback_query.message.reply_text(f"{msg}\n\nEnter CATEGORY ID for this channel:")
+    await update.callback_query.message.reply_text(f"{msg}\n\n👇 **IMPORTANT:**\nEnter the **ID Number** of the category (e.g. 1):")
     return ADD_CHAN_CAT
 
 async def add_chan_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_chan_cat'] = update.message.text
+    text_input = update.message.text
+    if not text_input.isdigit():
+        await update.message.reply_text("❌ Invalid ID. Please enter the **Number** only (e.g. 1). Try again:")
+        return ADD_CHAN_CAT
+        
+    context.user_data['new_chan_cat'] = int(text_input)
     await update.message.reply_text("Enter Channel Display Name (e.g. VIP Plan):")
     return ADD_CHAN_NAME
 
@@ -199,25 +200,44 @@ async def add_chan_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Channel/Plan added successfully.")
     return ConversationHandler.END
 
-# --- 3. SET PAYMENT INFO ---
-async def set_pay_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("💰 Enter **UPI ID**:")
-    return SET_UPI
+# --- 3. SET PAYMENT INFO (NEW SEPARATE BUTTONS) ---
+async def set_pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🇮🇳 Set UPI", callback_data='set_pay_upi_btn')],
+        [InlineKeyboardButton("🅿️ Set PayPal", callback_data='set_pay_paypal_btn')],
+        [InlineKeyboardButton("🔙 Back", callback_data='user_home')]
+    ]
+    await update.callback_query.message.edit_text("💰 **Payment Settings**\nSelect which method you want to configure:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    return PAY_CHOOSE
 
-async def set_pay_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_upi'] = update.message.text
-    await update.message.reply_text("💰 Enter **PayPal Link**:")
-    return SET_PAYPAL
+async def set_pay_ask_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("📝 Enter your **UPI ID**:")
+    return PAY_INPUT_UPI
 
-async def set_pay_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    new_paypal = update.message.text
-    new_upi = context.user_data['new_upi']
+async def set_pay_save_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_upi = update.message.text
     conn = get_db()
     c = conn.cursor()
-    c.execute("UPDATE payment_settings SET upi_id=?, paypal_link=? WHERE id=1", (new_upi, new_paypal))
+    c.execute("UPDATE payment_settings SET upi_id=? WHERE id=1", (new_upi,))
     conn.commit()
     conn.close()
-    await update.message.reply_text("✅ Payment Details Updated!")
+    await update.message.reply_text("✅ UPI ID Updated!")
+    return ConversationHandler.END
+
+async def set_pay_ask_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("📝 Enter your **PayPal Link**:")
+    return PAY_INPUT_PAYPAL
+
+async def set_pay_save_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_paypal = update.message.text
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE payment_settings SET paypal_link=? WHERE id=1", (new_paypal,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("✅ PayPal Link Updated!")
     return ConversationHandler.END
 
 # --- 4. BROADCAST SYSTEM ---
@@ -264,7 +284,6 @@ async def broadcast_content_save(update: Update, context: ContextTypes.DEFAULT_T
 async def broadcast_schedule_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = update.message.text
     try:
-        # 12 Hour Format Parsing
         local_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %I:%M %p")
         local_dt = IST.localize(local_dt)
         
@@ -292,14 +311,13 @@ async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
         c = conn.cursor()
         
         if bd_type == 'bd_type_bot':
-            # Select ALL users, not just subscribers
             c.execute("SELECT user_id FROM all_users")
             users = c.fetchall()
             for u in users:
                 try:
                     await context.bot.copy_message(chat_id=u[0], from_chat_id=from_chat, message_id=msg_id)
                 except (Forbidden, BadRequest):
-                    pass # User blocked bot
+                    pass 
                     
         elif bd_type == 'bd_type_chan':
             target_db_id = data['bd_target_id']
@@ -407,7 +425,7 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
-# --- 7. EXPIRY SYSTEM (UPDATED FOR DURATION) ---
+# --- 7. EXPIRY SYSTEM ---
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Running expiry check...", show_alert=True)
     await check_expiry_job(context)
@@ -418,7 +436,6 @@ async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     c = conn.cursor()
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
     
-    # Check for expired users based on their specific expiry date
     c.execute("SELECT user_id, channel_chat_id, rowid FROM subscriptions WHERE expiry_date < ?", (now_str,))
     expired = c.fetchall()
     
@@ -448,7 +465,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"📊 **Stats**\n📂 Categories: {cats}\n📺 Plans: {chans}\n👥 Total Users: {users}"
     await update.callback_query.message.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
 
-# --- 9. USER CHAT (UPDATED) ---
+# --- 9. USER CHAT ---
 async def user_start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -464,7 +481,6 @@ async def user_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("❌ Videos/GIFs not allowed.")
         return USER_CHAT_MODE
 
-    # Send to Admin with Reply Button
     kb = [[InlineKeyboardButton("↩️ Reply", callback_data=f"adm_reply_{user.id}"), InlineKeyboardButton("❌ End Chat", callback_data="adm_end_chat")]]
     await context.bot.copy_message(chat_id=ADMIN_ID, from_chat_id=user.id, message_id=msg.message_id, caption=msg.caption, reply_markup=InlineKeyboardMarkup(kb))
     await msg.reply_text("✅ Sent.")
@@ -496,7 +512,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Chat Ended")
-    await start(update, context) # Go back to dashboard
+    await start(update, context) 
     return ConversationHandler.END
 
 # --- USER STORE FLOW (FIXED) ---
@@ -588,7 +604,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT * FROM channels WHERE id=?", (cid,))
-        chan = c.fetchone() # duration is at index 6
+        chan = c.fetchone() 
         
         duration_days = chan[6]
         now = datetime.datetime.now(IST)
@@ -608,7 +624,6 @@ def main():
     application = Application.builder().token(TOKEN).build()
     application.job_queue.run_repeating(check_expiry_job, interval=3600, first=10)
 
-    # Handlers with allow_reentry=True
     application.add_handler(CommandHandler("start", start))
     
     application.add_handler(ConversationHandler(
@@ -628,10 +643,18 @@ def main():
         },
         fallbacks=[], allow_reentry=True))
 
+    # Updated Payment Conversation
     application.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(set_pay_start, pattern='admin_set_pay')],
-        states={SET_UPI: [MessageHandler(filters.TEXT, set_pay_upi)], SET_PAYPAL: [MessageHandler(filters.TEXT, set_pay_paypal)]},
-        fallbacks=[], allow_reentry=True))
+        entry_points=[CallbackQueryHandler(set_pay_menu, pattern='admin_set_pay')],
+        states={
+            PAY_CHOOSE: [
+                CallbackQueryHandler(set_pay_ask_upi, pattern='set_pay_upi_btn'),
+                CallbackQueryHandler(set_pay_ask_paypal, pattern='set_pay_paypal_btn')
+            ],
+            PAY_INPUT_UPI: [MessageHandler(filters.TEXT, set_pay_save_upi)],
+            PAY_INPUT_PAYPAL: [MessageHandler(filters.TEXT, set_pay_save_paypal)],
+        },
+        fallbacks=[CallbackQueryHandler(start, pattern='user_home')], allow_reentry=True))
 
     application.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_menu, pattern='admin_broadcast')],
@@ -658,7 +681,7 @@ def main():
         states={ADMIN_REPLY_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, admin_send_reply)]},
         fallbacks=[CallbackQueryHandler(admin_end_chat, pattern='adm_end_chat')], allow_reentry=True))
     
-    application.add_handler(CallbackQueryHandler(pay_conv_entry, pattern='req_upload_ss')) # Separate handler for pay
+    application.add_handler(CallbackQueryHandler(pay_conv_entry, pattern='req_upload_ss')) 
     pay_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(request_screenshot, pattern='req_upload_ss')],
         states={USER_UPLOAD_SCREENSHOT: [MessageHandler(filters.PHOTO, handle_screenshot)]},
@@ -666,7 +689,6 @@ def main():
     )
     application.add_handler(pay_conv)
 
-    # General Callbacks
     application.add_handler(CallbackQueryHandler(user_show_channels, pattern='^view_cat_'))
     application.add_handler(CallbackQueryHandler(show_payment_options, pattern='^buy_'))
     application.add_handler(CallbackQueryHandler(admin_decision, pattern='^(appr|rej)_'))
@@ -680,7 +702,6 @@ def main():
     print("Bot is running...")
     application.run_polling()
 
-# Need this wrapper because I defined pay_conv differently above to avoid recursion error
 async def pay_conv_entry(update, context):
     return await request_screenshot(update, context)
 
