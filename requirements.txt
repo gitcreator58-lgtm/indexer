@@ -1,9 +1,2 @@
-Pyrogram
-TgCrypto
-motor
-dnspython
-aiohttp
-requests
-uvloop
-python-dotenv
-certifi
+python-telegram-bot
+yt-dlp
