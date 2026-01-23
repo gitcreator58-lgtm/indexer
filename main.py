@@ -19,8 +19,9 @@ from telegram.error import BadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- CONFIGURATION ---
-TOKEN = '7123456789:ABC-DefGhIjKlMnOpQrStUvWxYz'  # REPLACE THIS
-ADMIN_ID = 123456789           # REPLACE WITH YOUR NUMERIC ID
+# ⚠️ YOU MUST PASTE YOUR REAL DATA BELOW ⚠️
+TOKEN = 'PASTE_YOUR_REAL_TOKEN_HERE'  # <--- PASTE TOKEN FROM BOTFATHER HERE
+ADMIN_ID = 123456789                  # <--- REPLACE WITH YOUR NUMERIC ID
 IST = pytz.timezone('Asia/Kolkata')
 PORT = 8080
 
