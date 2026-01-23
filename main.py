@@ -51,8 +51,9 @@ def start_web_server():
     BROADCAST_SELECT_TYPE, BROADCAST_CONTENT, BROADCAST_DATETIME, BROADCAST_TARGETS,
     USER_UPLOAD_SCREENSHOT,
     USER_CHAT_MODE,
-    ADMIN_REPLY_MODE
-) = range(17)
+    ADMIN_REPLY_MODE,
+    AIO_SET_LINKS, AIO_SET_PRICE, AIO_SET_DURATION # New All-In-One States
+) = range(20)
 
 # --- DATABASE SETUP ---
 def setup_db():
@@ -67,16 +68,19 @@ def setup_db():
                  (id INTEGER PRIMARY KEY, upi_id TEXT, paypal_link TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS subscriptions 
                  (user_id INTEGER, channel_db_id INTEGER, join_date TEXT, 
-                  expiry_date TEXT, channel_chat_id TEXT)''')
+                  expiry_date TEXT, channel_chat_id TEXT, plan_name TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS broadcast_channels 
                  (id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS all_users 
-                 (user_id INTEGER PRIMARY KEY)''')
+                 (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT)''')
+    # All-in-One Table
+    c.execute('''CREATE TABLE IF NOT EXISTS aio_settings
+                 (id INTEGER PRIMARY KEY, links TEXT, price TEXT, duration INTEGER)''')
     
     c.execute("SELECT * FROM payment_settings")
     if not c.fetchone():
-        c.execute("INSERT INTO payment_settings (upi_id, paypal_link) VALUES (?, ?)", 
-                  ("not_set", "not_set"))
+        c.execute("INSERT INTO payment_settings (upi_id, paypal_link) VALUES (?, ?)", ("not_set", "not_set"))
+    
     conn.commit()
     conn.close()
 
@@ -89,30 +93,33 @@ def get_db():
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-def save_user(user_id):
+def save_user(user):
     conn = get_db()
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO all_users (user_id) VALUES (?)", (user_id,))
+    c.execute("INSERT OR REPLACE INTO all_users (user_id, first_name, username) VALUES (?, ?, ?)", (user.id, user.first_name, user.username))
     conn.commit()
     conn.close()
 
-# --- START ---
+# --- START & ADMIN ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    save_user(user.id) 
+    save_user(user)
 
     if is_admin(user.id):
         keyboard = [
             [InlineKeyboardButton("➕ Add Category", callback_data='admin_add_cat'),
-             InlineKeyboardButton("➕ Add Channel/Group", callback_data='admin_add_chan')],
+             InlineKeyboardButton("➕ Add Channel/Plan", callback_data='admin_add_chan')],
+            [InlineKeyboardButton("🌟 Set All-in-One Pack", callback_data='admin_set_aio')],
             [InlineKeyboardButton("💰 Set Payment Info", callback_data='admin_set_pay'),
              InlineKeyboardButton("📢 Setup Broadcast", callback_data='admin_broadcast')],
             [InlineKeyboardButton("➕ Add Broadcast Channel", callback_data='admin_add_bc_chan'),
              InlineKeyboardButton("🚫 Manage Expired", callback_data='admin_manage_expire')],
             [InlineKeyboardButton("👀 View Stats", callback_data='admin_stats'),
-             InlineKeyboardButton("🗑 Manage / Delete Data", callback_data='admin_delete_menu')]
+             InlineKeyboardButton("👥 View Members", callback_data='admin_view_members')],
+            [InlineKeyboardButton("🗑 Manage / Delete Data", callback_data='admin_delete_menu')]
         ]
         text = "👑 **Admin Dashboard**\nSelect an option to customize your bot.\n\n🤖 **BOT created by RETOUCH**"
+        
         if update.callback_query:
             await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         else:
@@ -147,17 +154,19 @@ async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text("❌ No categories found. Add a category first.")
         return ConversationHandler.END
 
-    msg = "Available Categories:\n" + "\n".join([f"ID: {c[0]} | Name: {c[1]}" for c in cats])
-    await update.callback_query.message.reply_text(f"{msg}\n\n👇 **IMPORTANT:**\nEnter the **ID Number** of the category (e.g. 1):")
+    # Using Buttons for Category Selection to fix "Plan not showing" issue
+    kb = []
+    for cat in cats:
+        kb.append([InlineKeyboardButton(f"{cat[1]}", callback_data=str(cat[0]))]) # ID as callback data
+    
+    await update.callback_query.message.reply_text("👇 **Select Category to add plan under:**", reply_markup=InlineKeyboardMarkup(kb))
     return ADD_CHAN_CAT
 
 async def add_chan_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_input = update.message.text
-    if not text_input.isdigit():
-        await update.message.reply_text("❌ Invalid ID. Number only.")
-        return ADD_CHAN_CAT
-    context.user_data['new_chan_cat'] = int(text_input)
-    await update.message.reply_text("Enter Channel Name (e.g. VIP Plan):")
+    query = update.callback_query
+    await query.answer()
+    context.user_data['new_chan_cat'] = int(query.data)
+    await query.message.reply_text("Enter Channel Display Name (e.g. VIP Plan):")
     return ADD_CHAN_NAME
 
 async def add_chan_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -193,10 +202,40 @@ async def add_chan_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
               (d['new_chan_cat'], d['new_chan_name'], d['new_chan_link'], d['new_chan_price'], gid, d['new_chan_duration']))
     conn.commit()
     conn.close()
-    await update.message.reply_text("✅ Channel/Plan added successfully.")
+    await update.message.reply_text("✅ Plan added successfully.")
     return ConversationHandler.END
 
-# --- 3. SET PAYMENT INFO ---
+# --- 3. ALL IN ONE SETTINGS ---
+async def aio_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("🌟 **All-in-One Setup**\n\nEnter all Invite Links separated by comma (e.g. `link1, link2, link3`):")
+    return AIO_SET_LINKS
+
+async def aio_save_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['aio_links'] = update.message.text
+    await update.message.reply_text("Enter Total Price (e.g. ₹2000):")
+    return AIO_SET_PRICE
+
+async def aio_save_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['aio_price'] = update.message.text
+    await update.message.reply_text("Enter Duration in Days:")
+    return AIO_SET_DURATION
+
+async def aio_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        dur = int(update.message.text)
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM aio_settings") # Only 1 AIO pack allowed
+        c.execute("INSERT INTO aio_settings (links, price, duration) VALUES (?, ?, ?)", 
+                  (context.user_data['aio_links'], context.user_data['aio_price'], dur))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text("✅ All-in-One Pack Set!")
+    except ValueError:
+        await update.message.reply_text("❌ Duration must be number.")
+    return ConversationHandler.END
+
+# --- 4. PAYMENT & MEMBERS ---
 async def set_pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🇮🇳 Set UPI", callback_data='set_pay_upi_btn')],
@@ -236,7 +275,30 @@ async def set_pay_save_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("✅ PayPal Link Updated!")
     return ConversationHandler.END
 
-# --- 4. BROADCAST ---
+async def admin_view_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''SELECT s.user_id, u.first_name, s.join_date, s.plan_name 
+                 FROM subscriptions s 
+                 LEFT JOIN all_users u ON s.user_id = u.user_id''')
+    data = c.fetchall()
+    conn.close()
+    
+    if not data:
+        await update.callback_query.message.edit_text("Empty list.")
+        return
+
+    msg = "👥 **Paid Members List:**\n\n"
+    for row in data:
+        msg += f"👤 {row[1]} (`{row[0]}`)\n📅 {row[2]} | 📦 {row[3]}\n\n"
+    
+    # Split message if too long
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n...(truncated)"
+        
+    await update.callback_query.message.edit_text(msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
+
+# --- 5. BROADCAST ---
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("To Bot Users", callback_data="bd_type_bot"), InlineKeyboardButton("To Channels", callback_data="bd_type_chan")]]
     await update.callback_query.message.reply_text("📣 Select Type:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -305,7 +367,7 @@ async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Broadcast error: {e}")
 
-# --- 5. BROADCAST CHANNEL SETUP ---
+# --- 6. UTILS ---
 async def add_bc_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.reply_text("Format: `Name|ChatID`")
     return 1
@@ -323,7 +385,6 @@ async def add_bc_chan_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error.")
     return ConversationHandler.END
 
-# --- 6. DELETE DATA ---
 async def admin_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("🗑 Delete Categories", callback_data='del_menu_cats')],
@@ -388,7 +449,6 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
-# --- 7. EXPIRY ---
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Checking...", show_alert=True)
     await check_expiry_job(context)
@@ -409,7 +469,6 @@ async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
         except: pass
     conn.close()
 
-# --- 8. STATS ---
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
@@ -422,7 +481,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.callback_query.message.edit_text(f"📊 **Stats**\nCats: {cats}\nPlans: {chans}\nUsers: {users}", parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
 
-# --- 9. CHAT ---
+# --- CHAT ---
 async def user_start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -446,7 +505,6 @@ async def user_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await user_show_categories(update, context)
     return ConversationHandler.END
 
-# --- 10. ADMIN REPLY ---
 async def admin_start_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -468,16 +526,21 @@ async def admin_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     return ConversationHandler.END
 
-# --- USER STORE ---
+# --- USER STORE & PAYMENT ---
 async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT * FROM categories")
     cats = c.fetchall()
+    c.execute("SELECT * FROM aio_settings")
+    aio = c.fetchone()
     conn.close()
     kb = []
+    
+    if aio: kb.append([InlineKeyboardButton("🌟 All-in-One Pack", callback_data="buy_aio")])
     for cat in cats: kb.append([InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}")])
     kb.append([InlineKeyboardButton("📞 Chat with Admin", callback_data="start_user_chat")])
+    
     text = "👋 Welcome! Select a category:\n\n🤖 **BOT created by RETOUCH**"
     if update.callback_query: await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
@@ -496,33 +559,40 @@ async def user_show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE)
     kb.append([InlineKeyboardButton("🔙 Back", callback_data="user_home")])
     await query.message.edit_text("👇 Select a plan to join:", reply_markup=InlineKeyboardMarkup(kb))
 
-# --- PAYMENT & INVOICE ---
 async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    chan_id = int(query.data.split('_')[1])
-    context.user_data['selected_channel_id'] = chan_id
-    
+    data = query.data
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT upi_id, paypal_link FROM payment_settings")
     sets = c.fetchone()
-    c.execute("SELECT name, price, duration FROM channels WHERE id=?", (chan_id,))
-    info = c.fetchone()
+    
+    if data == 'buy_aio':
+        context.user_data['is_aio'] = True
+        c.execute("SELECT * FROM aio_settings")
+        aio = c.fetchone()
+        info = ["All-in-One Pack", aio[2], aio[3]] # Name, Price, Duration
+    else:
+        context.user_data['is_aio'] = False
+        chan_id = int(data.split('_')[1])
+        context.user_data['selected_channel_id'] = chan_id
+        c.execute("SELECT name, price, duration FROM channels WHERE id=?", (chan_id,))
+        info = c.fetchone()
+    
     conn.close()
     
     payment_txt = ""
     if sets[0] != 'not_set': payment_txt += f"🇮🇳 **UPI ID:** `{sets[0]}`\n\n"
     if sets[1] != 'not_set': payment_txt += f"🅿️ **PayPal:** {sets[1]}\n\n"
-    
-    if not payment_txt: payment_txt = "⚠️ No payment methods available. Contact Admin."
+    if not payment_txt: payment_txt = "⚠️ No payment methods set."
 
     text = (f"💳 **Payment Gateway**\n\n"
             f"📦 **Plan:** {info[0]}\n"
             f"💸 **Price:** {info[1]}\n"
             f"⏳ **Duration:** {info[2]} Days\n\n"
             f"{payment_txt}"
-            f"📸 **Step 2:** Pay amount & Upload Screenshot.")
+            f"📸 **Step 2:** Upload Screenshot.")
             
     kb = [[InlineKeyboardButton("📸 Upload Screenshot", callback_data="req_upload_ss")], [InlineKeyboardButton("🔙 Cancel", callback_data="user_home")]]
     await query.message.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
@@ -537,28 +607,35 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return USER_UPLOAD_SCREENSHOT
     
     user = update.effective_user
-    chan_id = context.user_data.get('selected_channel_id')
-    if not chan_id: return ConversationHandler.END
-    
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT name, price FROM channels WHERE id=?", (chan_id,))
-    info = c.fetchone()
+    
+    if context.user_data.get('is_aio'):
+        c.execute("SELECT * FROM aio_settings")
+        aio = c.fetchone()
+        plan_name, price = "All-in-One Pack", aio[2]
+        callback_data = f"appr_{user.id}_aio"
+    else:
+        chan_id = context.user_data.get('selected_channel_id')
+        c.execute("SELECT name, price FROM channels WHERE id=?", (chan_id,))
+        info = c.fetchone()
+        plan_name, price = info[0], info[1]
+        callback_data = f"appr_{user.id}_{chan_id}"
+        
     conn.close()
     
-    # Notify Admin
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %I:%M %p")
     caption = (f"🔔 **New Payment Verification**\n\n"
                f"👤 **User:** {user.first_name} (@{user.username})\n"
                f"🆔 **ID:** `{user.id}`\n"
-               f"📦 **Plan:** {info[0]}\n"
-               f"💸 **Price:** {info[1]}\n"
+               f"📦 **Plan:** {plan_name}\n"
+               f"💸 **Price:** {price}\n"
                f"🕒 **Time:** {now_str}")
                
-    kb = [[InlineKeyboardButton("✅ Accept", callback_data=f"appr_{user.id}_{chan_id}"), InlineKeyboardButton("❌ Reject", callback_data=f"rej_{user.id}")]]
+    kb = [[InlineKeyboardButton("✅ Accept", callback_data=callback_data), InlineKeyboardButton("❌ Reject", callback_data=f"rej_{user.id}")]]
     await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, caption=caption, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
     
-    await update.message.reply_text("✅ Screenshot sent to Admin for verification. Please wait.")
+    await update.message.reply_text("✅ Sent to Admin for verification.")
     return ConversationHandler.END
 
 async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -569,39 +646,48 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = int(data[1])
     
     if action == 'rej':
-        await context.bot.send_message(uid, "❌ **Payment Rejected.**\nPlease contact admin if this is a mistake.")
+        await context.bot.send_message(uid, "❌ **Payment Rejected.**")
         await query.message.edit_caption(query.message.caption + "\n\n🔴 **REJECTED**")
     
     elif action == 'appr':
-        cid = int(data[2])
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT * FROM channels WHERE id=?", (cid,))
-        chan = c.fetchone() # id, cat, name, link, price, chat_id, duration
-        
-        # Calculate Dates
         now = datetime.datetime.now(IST)
-        duration_days = chan[6]
-        expiry = now + datetime.timedelta(days=duration_days)
-        
         join_date = now.strftime("%Y-%m-%d")
         join_time = now.strftime("%I:%M %p")
-        expiry_str = expiry.strftime("%Y-%m-%d")
-        purchase_year = now.year
         
-        # Add to DB
-        c.execute("DELETE FROM subscriptions WHERE user_id=? AND channel_db_id=?", (uid, cid))
-        c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?)", 
-                  (uid, cid, join_date, expiry.strftime("%Y-%m-%d %H:%M"), chan[5]))
+        if data[2] == 'aio':
+            c.execute("SELECT * FROM aio_settings")
+            aio = c.fetchone() # links, price, duration
+            links_list = aio[1].split(',')
+            formatted_links = "\n".join([f"🔗 {link.strip()}" for link in links_list])
+            plan_name = "All-in-One Pack"
+            duration = aio[3]
+            
+            # For AIO, we just save subscription, no channel_id to kick from specifically (limitation of single ID)
+            # You could loop insert for separate tracking if needed
+            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name) VALUES (?, ?, ?, ?)",
+                      (uid, join_date, (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d %H:%M"), plan_name))
+            
+        else:
+            cid = int(data[2])
+            c.execute("SELECT * FROM channels WHERE id=?", (cid,))
+            chan = c.fetchone()
+            plan_name = chan[2]
+            duration = chan[6]
+            formatted_links = f"🔗 **JOIN LINK:** {chan[3]}"
+            
+            c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?, ?)", 
+                      (uid, cid, join_date, (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d %H:%M"), chan[5], plan_name))
+        
         conn.commit()
         conn.close()
         
-        # 1. Happy Message
+        expiry_str = (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d")
         user_info = await context.bot.get_chat(uid)
-        happy_msg = (f"🎉 **Payment Accepted!**\n\n"
-                     f"Congratulations! You have successfully joined **{chan[2]}**.\n\n"
-                     f"🔗 **JOIN LINK:** {chan[3]}")
-        await context.bot.send_message(uid, happy_msg, parse_mode='Markdown')
+        
+        # 1. Happy Message
+        await context.bot.send_message(uid, f"🎉 **Payment Accepted!**\n\nHere are your links:\n{formatted_links}", parse_mode='Markdown')
         
         # 2. Digital Invoice
         invoice = (f"🧾 **DIGITAL INVOICE**\n"
@@ -611,13 +697,12 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    f"👤 **Member:** {user_info.first_name}\n"
                    f"🆔 **User ID:** `{uid}`\n"
                    f"━━━━━━━━━━━━━━━━━━━\n"
-                   f"📦 **Plan:** {chan[2]}\n"
-                   f"⏳ **Duration:** {duration_days} Days\n"
+                   f"📦 **Plan:** {plan_name}\n"
+                   f"⏳ **Duration:** {duration} Days\n"
                    f"🗓 **Expiry:** {expiry_str}\n"
-                   f"📅 **Year:** {purchase_year}\n"
+                   f"📅 **Year:** {now.year}\n"
                    f"━━━━━━━━━━━━━━━━━━━\n"
                    f"✅ **Status:** PAID")
-                   
         await context.bot.send_message(uid, invoice, parse_mode='Markdown')
         await query.message.edit_caption(query.message.caption + "\n\n🟢 **ACCEPTED**")
 
@@ -629,6 +714,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     
+    # Conversations
     application.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
         states={ADD_CAT_NAME: [MessageHandler(filters.TEXT, add_cat_save)]},
@@ -637,7 +723,7 @@ def main():
     application.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(add_chan_start, pattern='admin_add_chan')],
         states={
-            ADD_CHAN_CAT: [MessageHandler(filters.TEXT, add_chan_cat_save)],
+            ADD_CHAN_CAT: [CallbackQueryHandler(add_chan_cat_save)], # Button Logic
             ADD_CHAN_NAME: [MessageHandler(filters.TEXT, add_chan_name_save)],
             ADD_CHAN_LINK: [MessageHandler(filters.TEXT, add_chan_link_save)],
             ADD_CHAN_PRICE: [MessageHandler(filters.TEXT, add_chan_price_save)],
@@ -647,12 +733,18 @@ def main():
         fallbacks=[], allow_reentry=True))
 
     application.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(aio_start, pattern='admin_set_aio')],
+        states={
+            AIO_SET_LINKS: [MessageHandler(filters.TEXT, aio_save_links)],
+            AIO_SET_PRICE: [MessageHandler(filters.TEXT, aio_save_price)],
+            AIO_SET_DURATION: [MessageHandler(filters.TEXT, aio_final)],
+        },
+        fallbacks=[], allow_reentry=True))
+
+    application.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(set_pay_menu, pattern='admin_set_pay')],
         states={
-            PAY_CHOOSE: [
-                CallbackQueryHandler(set_pay_ask_upi, pattern='set_pay_upi_btn'),
-                CallbackQueryHandler(set_pay_ask_paypal, pattern='set_pay_paypal_btn')
-            ],
+            PAY_CHOOSE: [CallbackQueryHandler(set_pay_ask_upi, pattern='set_pay_upi_btn'), CallbackQueryHandler(set_pay_ask_paypal, pattern='set_pay_paypal_btn')],
             PAY_INPUT_UPI: [MessageHandler(filters.TEXT, set_pay_save_upi)],
             PAY_INPUT_PAYPAL: [MessageHandler(filters.TEXT, set_pay_save_paypal)],
         },
@@ -663,7 +755,7 @@ def main():
         states={
             BROADCAST_SELECT_TYPE: [CallbackQueryHandler(broadcast_type_handler)],
             BROADCAST_TARGETS: [MessageHandler(filters.TEXT, broadcast_target_save)],
-            BROADCAST_CONTENT: [MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_content_save)],
+            BROADCAST_CONTENT: [MessageHandler(filters.ALL, broadcast_content_save)],
             BROADCAST_DATETIME: [MessageHandler(filters.TEXT, broadcast_schedule_final)]
         },
         fallbacks=[], allow_reentry=True))
@@ -690,10 +782,12 @@ def main():
     )
     application.add_handler(pay_conv)
 
+    # General Callbacks
     application.add_handler(CallbackQueryHandler(user_show_channels, pattern='^view_cat_'))
     application.add_handler(CallbackQueryHandler(show_payment_options, pattern='^buy_'))
     application.add_handler(CallbackQueryHandler(admin_decision, pattern='^(appr|rej)_'))
     application.add_handler(CallbackQueryHandler(admin_stats, pattern='admin_stats'))
+    application.add_handler(CallbackQueryHandler(admin_view_members, pattern='admin_view_members'))
     application.add_handler(CallbackQueryHandler(admin_manage_expire, pattern='admin_manage_expire'))
     application.add_handler(CallbackQueryHandler(admin_delete_menu, pattern='admin_delete_menu'))
     application.add_handler(CallbackQueryHandler(delete_item_selector, pattern='^(del_menu|del_reset)'))
