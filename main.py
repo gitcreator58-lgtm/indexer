@@ -7,7 +7,12 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 # --- CONFIGURATION ---
-TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE'  # Replace with your token
+# We get the token from the Environment Variable (set in Render dashboard)
+TOKEN = os.getenv("BOT_TOKEN")
+
+# Check if token exists immediately to fail fast if it's missing
+if not TOKEN:
+    raise ValueError("No BOT_TOKEN found! Please add it in your Render Environment Variables.")
 
 # Enable logging
 logging.basicConfig(
@@ -68,10 +73,9 @@ async def convert_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     # 1. Start the web server in a background thread
-    # daemon=True ensures the thread dies when the main program exits
     threading.Thread(target=start_web_server, daemon=True).start()
 
-    # 2. Start the Telegram Bot
+    # 2. Start the Telegram Bot using the TOKEN we loaded at the top
     application = ApplicationBuilder().token(TOKEN).build()
     
     link_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), convert_link)
