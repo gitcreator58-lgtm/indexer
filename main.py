@@ -1,3 +1,4 @@
+import os
 import logging
 import sqlite3
 import datetime
@@ -19,8 +20,8 @@ from telegram.error import BadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- CONFIGURATION ---
-# ⚠️ YOU MUST PASTE YOUR REAL DATA BELOW ⚠️
-TOKEN = 'PASTE_YOUR_REAL_TOKEN_HERE'  # <--- PASTE TOKEN FROM BOTFATHER HERE
+# ⚠️ THIS NOW READS FROM RENDER ENVIRONMENT VARIABLES
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 ADMIN_ID = 123456789                  # <--- REPLACE WITH YOUR NUMERIC ID
 IST = pytz.timezone('Asia/Kolkata')
 PORT = 8080
