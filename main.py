@@ -1,4 +1,5 @@
-import logging
+
+        import logging
 import yt_dlp
 import os
 import threading
@@ -6,7 +7,7 @@ import uuid
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("BOT_TOKEN")
@@ -107,6 +108,15 @@ def start_web_server():
     server.serve_forever()
 
 # --- BOT LOGIC ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    welcome_message = (
+        "👋 **Hello! I am your Stream Converter Bot.**\n\n"
+        "Send me any video link (YouTube, Hanime, TikTok, etc.), and I will generate "
+        "a direct HTML streaming link for you.\n\n"
+        "🚀 **Just paste a link to start!**"
+    )
+    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+
 async def convert_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_url = update.message.text
     
@@ -166,4 +176,25 @@ async def convert_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Error: {error_text}")
         
         # User-friendly error message
-        
+        final_msg = "❌ **Failed to Process Link**\n\n"
+        if "HTTP Error 403" in error_text:
+            final_msg += "Reason: **Access Denied (403)**. The site blocked the bot's IP."
+        elif "geo" in error_text.lower():
+            final_msg += "Reason: **Geo-Blocked**. Content not available in server region."
+        else:
+            final_msg += f"Reason: `{error_text[:100]}...`" # Show first 100 chars of error
+            
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=status_msg.message_id, text=final_msg, parse_mode='Markdown')
+
+if __name__ == '__main__':
+    threading.Thread(target=start_web_server, daemon=True).start()
+    application = ApplicationBuilder().token(TOKEN).build()
+    
+    # Add Start Handler
+    application.add_handler(CommandHandler("start", start))
+    
+    # Add Link Handler
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), convert_link))
+    
+    print("Bot is running...")
+    application.run_polling()
