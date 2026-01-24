@@ -381,6 +381,7 @@ async def admin_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("🗑 Delete Categories", callback_data='del_menu_cats')],
         [InlineKeyboardButton("🗑 Delete Channels", callback_data='del_menu_chans')],
+        [InlineKeyboardButton("🗑 Delete All-in-One Pack", callback_data='del_reset_aio')], # Added Delete AIO
         [InlineKeyboardButton("🗑 Delete Broadcast Chans", callback_data='del_menu_bc')],
         [InlineKeyboardButton("🔄 Reset Payment Info", callback_data='del_reset_pay')],
         [InlineKeyboardButton("🔙 Back", callback_data='user_home')]
@@ -412,6 +413,12 @@ async def delete_item_selector(update: Update, context: ContextTypes.DEFAULT_TYP
         conn.close()
         await query.answer("Reset!", show_alert=True)
         return
+    elif data == 'del_reset_aio': # Handle AIO Delete
+        c.execute("DELETE FROM aio_settings")
+        conn.commit()
+        conn.close()
+        await query.answer("All-in-One Pack Deleted!", show_alert=True)
+        return
 
     conn.close()
     kb.append([InlineKeyboardButton("🔙 Back", callback_data='admin_delete_menu')])
@@ -441,13 +448,20 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
+# --- 7. EXPIRY SYSTEM ---
+
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📉 Review & Kick Expired (Manual)", callback_data='expire_manual_check')],
         [InlineKeyboardButton("⚡ Active Auto-Kick (Automatic)", callback_data='expire_auto_info')],
         [InlineKeyboardButton("🔙 Back", callback_data='user_home')]
     ]
-    await update.callback_query.message.edit_text("🕰 **Manage Expired Memberships**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await update.callback_query.message.edit_text(
+        "🕰 **Manage Expired Memberships**\n\n"
+        "1️⃣ **Manual:** See a list of expired members and kick them with one click.\n"
+        "2️⃣ **Automatic:** Bot scans instantly when members expire and kicks them automatically.",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'
+    )
 
 async def expire_manual_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -455,6 +469,7 @@ async def expire_manual_check(update: Update, context: ContextTypes.DEFAULT_TYPE
     c = conn.cursor()
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
     
+    # Get expired users with names
     c.execute('''SELECT s.user_id, u.first_name, s.expiry_date 
                  FROM subscriptions s 
                  LEFT JOIN all_users u ON s.user_id = u.user_id 
@@ -492,8 +507,8 @@ async def expire_kick_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(item[0], "⚠️ **Membership Expired**\nYou have been removed from the channel.")
             c.execute("DELETE FROM subscriptions WHERE rowid=?", (item[2],))
             count += 1
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Kick error: {e}")
             
     conn.commit()
     conn.close()
@@ -502,21 +517,61 @@ async def expire_kick_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def expire_auto_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Auto-Kick is Active", show_alert=True)
-    await update.callback_query.message.edit_text("⚡ **Auto-Kick is ACTIVE**\nScanning every hour.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
+    await update.callback_query.message.edit_text(
+        "⚡ **Auto-Kick is ACTIVE**\n\n"
+        "The bot is automatically scanning every hour.\n"
+        "If a member is kicked, you will receive a notification here.\n\n"
+        "✅ You do not need to do anything.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
+    )
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-    c.execute("SELECT user_id, channel_chat_id, rowid FROM subscriptions WHERE expiry_date < ?", (now_str,))
-    for item in c.fetchall():
+    
+    # Select expired users to kick
+    c.execute('''SELECT s.user_id, s.channel_chat_id, s.rowid, s.join_date, s.expiry_date, u.first_name, u.username
+                 FROM subscriptions s
+                 LEFT JOIN all_users u ON s.user_id = u.user_id
+                 WHERE s.expiry_date < ?''', (now_str,))
+    
+    expired = c.fetchall()
+    
+    for item in expired:
+        user_id = item[0]
+        chat_id = item[1]
+        row_id = item[2]
+        join_date = item[3]
+        expiry_date = item[4]
+        name = item[5] if item[5] else "Unknown"
+        username = f"@{item[6]}" if item[6] else "No Username"
+
         try:
-            await context.bot.ban_chat_member(item[1], item[0])
-            await context.bot.unban_chat_member(item[1], item[0])
-            await context.bot.send_message(item[0], "⚠️ Membership Expired.")
-            c.execute("DELETE FROM subscriptions WHERE rowid=?", (item[2],))
+            # Kick User
+            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+            
+            # Notify User
+            await context.bot.send_message(user_id, "⚠️ **Membership Expired**\nYou have been removed from the channel.")
+            
+            # Remove from DB
+            c.execute("DELETE FROM subscriptions WHERE rowid=?", (row_id,))
             conn.commit()
-        except: pass
+            
+            # Notify Admin (NEW FEATURE)
+            admin_msg = (f"🚫 **Auto-Kick Report**\n\n"
+                         f"👤 **User:** {name} ({username})\n"
+                         f"🆔 **ID:** `{user_id}`\n"
+                         f"📅 **Purchased:** {join_date}\n"
+                         f"📅 **Expired:** {expiry_date}\n"
+                         f"✅ **Status:** Removed from VIP Channel")
+            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Auto-kick error: {e}")
+            pass
+    
     conn.close()
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -706,6 +761,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         join_date = now.strftime("%Y-%m-%d")
         join_time = now.strftime("%I:%M %p")
         
+        # AIO Logic Correction: Use fetched data properly
         if data[2] == 'aio':
             c.execute("SELECT * FROM aio_settings")
             aio = c.fetchone()
@@ -713,8 +769,15 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             formatted_links = "\n".join([f"🔗 {link.strip()}" for link in links_list])
             plan_name = "All-in-One Pack"
             duration = aio[3]
-            expiry_date = (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d %H:%M")
-            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name) VALUES (?, ?, ?, ?)", (uid, join_date, expiry_date, plan_name))
+            
+            # Calculate Expiry
+            expiry_dt = now + datetime.timedelta(days=duration)
+            expiry_str = expiry_dt.strftime("%Y-%m-%d")
+            expiry_db = expiry_dt.strftime("%Y-%m-%d %H:%M")
+            
+            # Insert
+            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name) VALUES (?, ?, ?, ?)", 
+                      (uid, join_date, expiry_db, plan_name))
             
         else:
             cid = int(data[2])
@@ -723,14 +786,19 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_name = chan[2]
             duration = chan[6]
             formatted_links = f"🔗 **JOIN LINK:** {chan[3]}"
-            expiry_date = (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d %H:%M")
+            
+            # Calculate Expiry
+            expiry_dt = now + datetime.timedelta(days=duration)
+            expiry_str = expiry_dt.strftime("%Y-%m-%d")
+            expiry_db = expiry_dt.strftime("%Y-%m-%d %H:%M")
+            
+            # Insert
             c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?, ?)", 
-                      (uid, cid, join_date, expiry_date, chan[5], plan_name))
+                      (uid, cid, join_date, expiry_db, chan[5], plan_name))
         
         conn.commit()
         conn.close()
         
-        expiry_str = (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d")
         user_info = await context.bot.get_chat(uid)
         
         await context.bot.send_message(uid, f"🎉 **Payment Accepted!**\n\nHere are your links:\n{formatted_links}", parse_mode='Markdown')
@@ -762,7 +830,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     
-    # HANDLERS DEFINED AS VARIABLES TO PREVENT SYNTAX ERRORS
+    # HANDLERS DEFINED AS VARIABLES
     
     cat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
