@@ -582,6 +582,7 @@ async def expire_auto_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "If a member is kicked, you will receive a notification here.\n\n"
         "✅ You do not need to do anything.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
+    )
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
@@ -688,7 +689,17 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_admin_activity()
-    await update.callback_query.answer("Chat Ended")
+    query = update.callback_query
+    await query.answer("Chat Ended")
+    
+    # Notify target user
+    target_id = context.user_data.get('reply_target')
+    if target_id:
+        try:
+            await context.bot.send_message(chat_id=target_id, text="🚫 **Chat has ended now.**", parse_mode='Markdown')
+        except:
+            pass
+
     await start(update, context)
     return ConversationHandler.END
 
@@ -853,7 +864,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         join_date = now.strftime("%Y-%m-%d")
         join_time = now.strftime("%I:%M %p")
         
-        # AIO Logic - Fixed fetching
+        # AIO Logic
         if data[2] == 'aio':
             c.execute("SELECT * FROM aio_settings")
             aio = c.fetchone()
