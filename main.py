@@ -99,7 +99,7 @@ def save_user(user):
     conn.commit()
     conn.close()
 
-# --- START ---
+# --- START & MENUS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user)
@@ -117,7 +117,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("👥 View Members", callback_data='admin_view_members')],
             [InlineKeyboardButton("🗑 Manage / Delete Data", callback_data='admin_delete_menu')]
         ]
-        text = "👑 **Admin Dashboard**\nSelect an option to customize your bot.\n\n🤖 **BOT created by RETOUCH**"
+        text = "👑 **Admin Dashboard**\nSelect an option to customize your bot.\n\n🤖 **Powered by RETOUCH**"
         
         if update.callback_query:
             await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -523,6 +523,7 @@ async def expire_auto_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "If a member is kicked, you will receive a notification here.\n\n"
         "✅ You do not need to do anything.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
+    )
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
@@ -623,6 +624,18 @@ async def admin_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     return ConversationHandler.END
 
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📚 **How to Use This Bot**\n\n"
+        "1️⃣ **Select a Category:** Choose a category from the main menu.\n"
+        "2️⃣ **Choose a Plan:** Click on a plan to see details.\n"
+        "3️⃣ **Make Payment:** Use the UPI or PayPal buttons to pay.\n"
+        "4️⃣ **Upload Screenshot:** Click the camera button and send your payment proof.\n"
+        "5️⃣ **Wait for Approval:** Admin will verify and you will get the link instantly!\n\n"
+        "📞 **Support:** Use the 'Chat with Admin' button for help."
+    )
+    await update.callback_query.message.edit_text(help_text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
+
 # --- USER STORE & PAYMENT ---
 async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
@@ -637,10 +650,20 @@ async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYP
     if aio: kb.append([InlineKeyboardButton("🌟 All-in-One Pack", callback_data="buy_aio")])
     for cat in cats: kb.append([InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}")])
     kb.append([InlineKeyboardButton("📞 Chat with Admin", callback_data="start_user_chat")])
+    kb.append([InlineKeyboardButton("ℹ️ How to Use", callback_data="show_help")])
     
-    text = "👋 Welcome! Select a category:\n\n🤖 **BOT created by RETOUCH**"
-    if update.callback_query: await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    else: await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    text = (
+        "👋 **Welcome to Our Premium Store!**\n\n"
+        "🚀 **Unlock Exclusive Content Today!**\n"
+        "Browse our categories below to find the best plans for you.\n\n"
+        "⚡ *Instant Access • Secure Payment • 24/7 Support*\n\n"
+        "🤖 **Powered by RETOUCH**"
+    )
+    
+    if update.callback_query: 
+        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    else: 
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def user_show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -753,6 +776,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         join_date = now.strftime("%Y-%m-%d")
         join_time = now.strftime("%I:%M %p")
         
+        # AIO Logic Fixed Here
         if data[2] == 'aio':
             c.execute("SELECT * FROM aio_settings")
             aio = c.fetchone()
@@ -761,12 +785,14 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_name = "All-in-One Pack"
             duration = aio[3]
             
+            # Calculate Expiry
             expiry_dt = now + datetime.timedelta(days=duration)
             expiry_str = expiry_dt.strftime("%Y-%m-%d")
             expiry_db = expiry_dt.strftime("%Y-%m-%d %H:%M")
             
-            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name) VALUES (?, ?, ?, ?)", 
-                      (uid, join_date, expiry_db, plan_name))
+            # Use 0 as channel_id for AIO since it has multiple
+            c.execute("INSERT INTO subscriptions (user_id, channel_db_id, join_date, expiry_date, channel_chat_id, plan_name) VALUES (?, ?, ?, ?, ?, ?)", 
+                      (uid, 0, join_date, expiry_db, 0, plan_name))
             
         else:
             cid = int(data[2])
@@ -817,8 +843,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     
-    # HANDLERS DEFINED AS VARIABLES
-    
+    # HANDLERS
     cat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
         states={ADD_CAT_NAME: [MessageHandler(filters.TEXT, add_cat_save)]},
@@ -909,6 +934,7 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_delete_menu, pattern='admin_delete_menu'))
     application.add_handler(CallbackQueryHandler(delete_item_selector, pattern='^(del_menu|del_reset)'))
     application.add_handler(CallbackQueryHandler(perform_delete, pattern='^perform_del'))
+    application.add_handler(CallbackQueryHandler(show_help, pattern='show_help'))
     application.add_handler(CallbackQueryHandler(start, pattern='user_home'))
 
     print("Bot is running...")
