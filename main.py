@@ -441,10 +441,82 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
+# --- 7. EXPIRY SYSTEM ---
+
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("Checking...", show_alert=True)
-    await check_expiry_job(context)
-    await update.callback_query.message.reply_text("✅ Check Done.")
+    keyboard = [
+        [InlineKeyboardButton("📉 Review & Kick Expired (Manual)", callback_data='expire_manual_check')],
+        [InlineKeyboardButton("⚡ Active Auto-Kick (Automatic)", callback_data='expire_auto_info')],
+        [InlineKeyboardButton("🔙 Back", callback_data='user_home')]
+    ]
+    await update.callback_query.message.edit_text(
+        "🕰 **Manage Expired Memberships**\n\n"
+        "1️⃣ **Manual:** See a list of expired members and kick them with one click.\n"
+        "2️⃣ **Automatic:** Bot scans instantly when members expire and kicks them automatically.",
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'
+    )
+
+async def expire_manual_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    conn = get_db()
+    c = conn.cursor()
+    now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+    
+    # Get expired users with names
+    c.execute('''SELECT s.user_id, u.first_name, s.expiry_date 
+                 FROM subscriptions s 
+                 LEFT JOIN all_users u ON s.user_id = u.user_id 
+                 WHERE s.expiry_date < ?''', (now_str,))
+    expired = c.fetchall()
+    conn.close()
+    
+    if not expired:
+        await query.message.edit_text("✅ **No expired members found.**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
+        return
+
+    msg = "📉 **Expired Members Pending Removal:**\n\n"
+    for row in expired:
+        msg += f"🚫 {row[1]} (ID: `{row[0]}`)\n📅 Expired: {row[2]}\n\n"
+    
+    keyboard = [[InlineKeyboardButton("🚫 Kick All Listed Users", callback_data='expire_kick_now')], [InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]
+    await query.message.edit_text(msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def expire_kick_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Kicking users...", show_alert=True)
+    
+    conn = get_db()
+    c = conn.cursor()
+    now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+    
+    c.execute("SELECT user_id, channel_chat_id, rowid FROM subscriptions WHERE expiry_date < ?", (now_str,))
+    expired = c.fetchall()
+    
+    count = 0
+    for item in expired:
+        try:
+            await context.bot.ban_chat_member(chat_id=item[1], user_id=item[0])
+            await context.bot.unban_chat_member(chat_id=item[1], user_id=item[0])
+            await context.bot.send_message(item[0], "⚠️ **Membership Expired**\nYou have been removed from the channel.")
+            c.execute("DELETE FROM subscriptions WHERE rowid=?", (item[2],))
+            count += 1
+        except Exception as e:
+            logger.error(f"Kick error: {e}")
+            
+    conn.commit()
+    conn.close()
+    
+    await query.message.edit_text(f"✅ **Process Completed**\n\n🗑 Removed {count} expired members.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
+
+async def expire_auto_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("Auto-Kick is Active", show_alert=True)
+    await update.callback_query.message.edit_text(
+        "⚡ **Auto-Kick is ACTIVE**\n\n"
+        "The bot is automatically scanning every hour.\n"
+        "Any member whose plan expires will be automatically kicked.\n\n"
+        "✅ You do not need to do anything.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
+    )
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
@@ -661,7 +733,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             cid = int(data[2])
             c.execute("SELECT * FROM channels WHERE id=?", (cid,))
-            chan = c.fetchone()
+            chan = c.fetchone() 
             plan_name = chan[2]
             duration = chan[6]
             formatted_links = f"🔗 **JOIN LINK:** {chan[3]}"
