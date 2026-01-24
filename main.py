@@ -441,20 +441,13 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         conn.close()
 
-# --- 7. EXPIRY SYSTEM ---
-
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📉 Review & Kick Expired (Manual)", callback_data='expire_manual_check')],
         [InlineKeyboardButton("⚡ Active Auto-Kick (Automatic)", callback_data='expire_auto_info')],
         [InlineKeyboardButton("🔙 Back", callback_data='user_home')]
     ]
-    await update.callback_query.message.edit_text(
-        "🕰 **Manage Expired Memberships**\n\n"
-        "1️⃣ **Manual:** See a list of expired members and kick them with one click.\n"
-        "2️⃣ **Automatic:** Bot scans instantly when members expire and kicks them automatically.",
-        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown'
-    )
+    await update.callback_query.message.edit_text("🕰 **Manage Expired Memberships**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def expire_manual_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -462,7 +455,6 @@ async def expire_manual_check(update: Update, context: ContextTypes.DEFAULT_TYPE
     c = conn.cursor()
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
     
-    # Get expired users with names
     c.execute('''SELECT s.user_id, u.first_name, s.expiry_date 
                  FROM subscriptions s 
                  LEFT JOIN all_users u ON s.user_id = u.user_id 
@@ -500,8 +492,8 @@ async def expire_kick_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(item[0], "⚠️ **Membership Expired**\nYou have been removed from the channel.")
             c.execute("DELETE FROM subscriptions WHERE rowid=?", (item[2],))
             count += 1
-        except Exception as e:
-            logger.error(f"Kick error: {e}")
+        except Exception:
+            pass
             
     conn.commit()
     conn.close()
@@ -510,13 +502,7 @@ async def expire_kick_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def expire_auto_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Auto-Kick is Active", show_alert=True)
-    await update.callback_query.message.edit_text(
-        "⚡ **Auto-Kick is ACTIVE**\n\n"
-        "The bot is automatically scanning every hour.\n"
-        "Any member whose plan expires will be automatically kicked.\n\n"
-        "✅ You do not need to do anything.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
-    )
+    await update.callback_query.message.edit_text("⚡ **Auto-Kick is ACTIVE**\nScanning every hour.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
@@ -766,6 +752,9 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_caption(query.message.caption + "\n\n🟢 **ACCEPTED**")
 
 # --- MAIN ---
+async def pay_conv_entry(update, context):
+    return await request_screenshot(update, context)
+
 def main():
     threading.Thread(target=start_web_server, daemon=True).start()
     application = Application.builder().token(TOKEN).build()
@@ -773,13 +762,14 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     
-    # Conversations
-    application.add_handler(ConversationHandler(
+    # HANDLERS DEFINED AS VARIABLES TO PREVENT SYNTAX ERRORS
+    
+    cat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
         states={ADD_CAT_NAME: [MessageHandler(filters.TEXT, add_cat_save)]},
-        fallbacks=[], allow_reentry=True))
-
-    application.add_handler(ConversationHandler(
+        fallbacks=[], allow_reentry=True)
+    
+    chan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_chan_start, pattern='admin_add_chan')],
         states={
             ADD_CHAN_CAT: [CallbackQueryHandler(add_chan_cat_save)],
@@ -789,27 +779,27 @@ def main():
             ADD_CHAN_DURATION: [MessageHandler(filters.TEXT, add_chan_duration_save)],
             ADD_CHAN_GROUP_ID: [MessageHandler(filters.TEXT, add_chan_final)],
         },
-        fallbacks=[], allow_reentry=True))
+        fallbacks=[], allow_reentry=True)
 
-    application.add_handler(ConversationHandler(
+    aio_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(aio_start, pattern='admin_set_aio')],
         states={
             AIO_SET_LINKS: [MessageHandler(filters.TEXT, aio_save_links)],
             AIO_SET_PRICE: [MessageHandler(filters.TEXT, aio_save_price)],
             AIO_SET_DURATION: [MessageHandler(filters.TEXT, aio_final)],
         },
-        fallbacks=[], allow_reentry=True))
+        fallbacks=[], allow_reentry=True)
 
-    application.add_handler(ConversationHandler(
+    pay_settings_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(set_pay_menu, pattern='admin_set_pay')],
         states={
             PAY_CHOOSE: [CallbackQueryHandler(set_pay_ask_upi, pattern='set_pay_upi_btn'), CallbackQueryHandler(set_pay_ask_paypal, pattern='set_pay_paypal_btn')],
             PAY_INPUT_UPI: [MessageHandler(filters.TEXT, set_pay_save_upi)],
             PAY_INPUT_PAYPAL: [MessageHandler(filters.TEXT, set_pay_save_paypal)],
         },
-        fallbacks=[CallbackQueryHandler(start, pattern='user_home')], allow_reentry=True))
+        fallbacks=[CallbackQueryHandler(start, pattern='user_home')], allow_reentry=True)
 
-    application.add_handler(ConversationHandler(
+    broadcast_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_menu, pattern='admin_broadcast')],
         states={
             BROADCAST_SELECT_TYPE: [CallbackQueryHandler(broadcast_type_handler)],
@@ -817,30 +807,41 @@ def main():
             BROADCAST_CONTENT: [MessageHandler(filters.ALL, broadcast_content_save)],
             BROADCAST_DATETIME: [MessageHandler(filters.TEXT, broadcast_schedule_final)]
         },
-        fallbacks=[], allow_reentry=True))
+        fallbacks=[], allow_reentry=True)
 
-    application.add_handler(ConversationHandler(
+    bc_chan_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_bc_chan_start, pattern='admin_add_bc_chan')],
         states={1: [MessageHandler(filters.TEXT, add_bc_chan_save)]},
-        fallbacks=[], allow_reentry=True))
+        fallbacks=[], allow_reentry=True)
 
-    application.add_handler(ConversationHandler(
+    user_chat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(user_start_chat, pattern='start_user_chat')],
         states={USER_CHAT_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, user_send_message), MessageHandler(filters.VIDEO, user_send_message)]},
-        fallbacks=[CallbackQueryHandler(user_end_chat, pattern='end_chat_mode')], allow_reentry=True))
+        fallbacks=[CallbackQueryHandler(user_end_chat, pattern='end_chat_mode')], allow_reentry=True)
 
-    application.add_handler(ConversationHandler(
+    admin_reply_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_start_reply, pattern='^adm_reply_')],
         states={ADMIN_REPLY_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, admin_send_reply)]},
-        fallbacks=[CallbackQueryHandler(admin_end_chat, pattern='adm_end_chat')], allow_reentry=True))
+        fallbacks=[CallbackQueryHandler(admin_end_chat, pattern='adm_end_chat')], allow_reentry=True)
     
-    pay_conv = ConversationHandler(
+    pay_process_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(pay_conv_entry, pattern='req_upload_ss')],
         states={USER_UPLOAD_SCREENSHOT: [MessageHandler(filters.PHOTO, handle_screenshot)]},
         fallbacks=[], allow_reentry=True
     )
-    application.add_handler(pay_conv)
 
+    # ADDING HANDLERS
+    application.add_handler(cat_conv)
+    application.add_handler(chan_conv)
+    application.add_handler(aio_conv)
+    application.add_handler(pay_settings_conv)
+    application.add_handler(broadcast_conv)
+    application.add_handler(bc_chan_conv)
+    application.add_handler(user_chat_conv)
+    application.add_handler(admin_reply_conv)
+    application.add_handler(pay_process_conv)
+
+    # General Callbacks
     application.add_handler(CallbackQueryHandler(user_show_channels, pattern='^view_cat_'))
     application.add_handler(CallbackQueryHandler(show_payment_options, pattern='^buy_'))
     application.add_handler(CallbackQueryHandler(admin_decision, pattern='^(appr|rej)_'))
@@ -857,9 +858,6 @@ def main():
 
     print("Bot is running...")
     application.run_polling()
-
-async def pay_conv_entry(update, context):
-    return await request_screenshot(update, context)
 
 if __name__ == '__main__':
     main()
