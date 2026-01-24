@@ -582,7 +582,6 @@ async def expire_auto_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "If a member is kicked, you will receive a notification here.\n\n"
         "✅ You do not need to do anything.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
-    )
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
