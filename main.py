@@ -761,8 +761,13 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             formatted_links = "\n".join([f"🔗 {link.strip()}" for link in links_list])
             plan_name = "All-in-One Pack"
             duration = aio[3]
-            expiry_date = (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d %H:%M")
-            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name) VALUES (?, ?, ?, ?)", (uid, join_date, expiry_date, plan_name))
+            
+            expiry_dt = now + datetime.timedelta(days=duration)
+            expiry_str = expiry_dt.strftime("%Y-%m-%d")
+            expiry_db = expiry_dt.strftime("%Y-%m-%d %H:%M")
+            
+            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name) VALUES (?, ?, ?, ?)", 
+                      (uid, join_date, expiry_db, plan_name))
             
         else:
             cid = int(data[2])
@@ -771,14 +776,17 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_name = chan[2]
             duration = chan[6]
             formatted_links = f"🔗 **JOIN LINK:** {chan[3]}"
-            expiry_date = (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d %H:%M")
+            
+            expiry_dt = now + datetime.timedelta(days=duration)
+            expiry_str = expiry_dt.strftime("%Y-%m-%d")
+            expiry_db = expiry_dt.strftime("%Y-%m-%d %H:%M")
+            
             c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?, ?)", 
-                      (uid, cid, join_date, expiry_date, chan[5], plan_name))
+                      (uid, cid, join_date, expiry_db, chan[5], plan_name))
         
         conn.commit()
         conn.close()
         
-        expiry_str = (now + datetime.timedelta(days=duration)).strftime("%Y-%m-%d")
         user_info = await context.bot.get_chat(uid)
         
         await context.bot.send_message(uid, f"🎉 **Payment Accepted!**\n\nHere are your links:\n{formatted_links}", parse_mode='Markdown')
@@ -810,7 +818,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     
-    # HANDLERS DEFINED AS VARIABLES TO PREVENT SYNTAX ERRORS
+    # HANDLERS DEFINED AS VARIABLES
     
     cat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
