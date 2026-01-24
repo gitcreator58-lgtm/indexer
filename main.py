@@ -75,6 +75,9 @@ def setup_db():
                  (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS aio_settings
                  (id INTEGER PRIMARY KEY, links TEXT, price TEXT, duration INTEGER)''')
+    # Track Admin Activity
+    c.execute('''CREATE TABLE IF NOT EXISTS admin_activity
+                 (id INTEGER PRIMARY KEY, last_seen TEXT)''')
     
     c.execute("SELECT * FROM payment_settings")
     if not c.fetchone():
@@ -99,12 +102,38 @@ def save_user(user):
     conn.commit()
     conn.close()
 
+def update_admin_activity():
+    conn = get_db()
+    c = conn.cursor()
+    now = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("INSERT OR REPLACE INTO admin_activity (id, last_seen) VALUES (1, ?)", (now,))
+    conn.commit()
+    conn.close()
+
+def is_admin_online():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT last_seen FROM admin_activity WHERE id=1")
+    row = c.fetchone()
+    conn.close()
+    if not row: return False
+    
+    last_seen = datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+    last_seen = IST.localize(last_seen)
+    now = datetime.datetime.now(IST)
+    
+    # Online if active in last 10 minutes
+    if (now - last_seen).total_seconds() < 600:
+        return True
+    return False
+
 # --- START & MENUS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user)
-
+    
     if is_admin(user.id):
+        update_admin_activity() # Update admin status
         keyboard = [
             [InlineKeyboardButton("➕ Add Category", callback_data='admin_add_cat'),
              InlineKeyboardButton("➕ Add Channel/Plan", callback_data='admin_add_chan')],
@@ -124,14 +153,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     else:
-        await user_show_categories(update, context)
+        # USER MAIN MENU (3 HIGHLIGHTED BUTTONS)
+        keyboard = [
+            [InlineKeyboardButton("💎 Go Premium", callback_data='user_show_cats')],
+            [InlineKeyboardButton("ℹ️ How to Use", callback_data='show_help'),
+             InlineKeyboardButton("📞 Chat with Admin", callback_data='start_user_chat')]
+        ]
+        text = (
+            "👋 **Welcome to Our Premium Store!**\n\n"
+            "🚀 **Unlock Exclusive Content Today!**\n"
+            "Click 'Go Premium' to see our plans.\n\n"
+            "⚡ *Instant Access • Secure Payment • 24/7 Support*\n\n"
+            "🤖 **Powered by RETOUCH**"
+        )
+        if update.callback_query:
+            await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        else:
+            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 # --- 1. ADD CATEGORY ---
 async def add_cat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     await update.callback_query.message.reply_text("Enter name for the new Category:")
     return ADD_CAT_NAME
 
 async def add_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     name = update.message.text
     conn = get_db()
     c = conn.cursor()
@@ -143,6 +190,7 @@ async def add_cat_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 2. ADD CHANNEL ---
 async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT * FROM categories")
@@ -154,8 +202,13 @@ async def add_chan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     kb = []
+    row = []
     for cat in cats:
-        kb.append([InlineKeyboardButton(f"{cat[1]}", callback_data=str(cat[0]))])
+        row.append(InlineKeyboardButton(f"{cat[1]}", callback_data=str(cat[0])))
+        if len(row) == 2:
+            kb.append(row)
+            row = []
+    if row: kb.append(row)
     
     await update.callback_query.message.reply_text("👇 **Select Category to add plan under:**", reply_markup=InlineKeyboardMarkup(kb))
     return ADD_CHAN_CAT
@@ -205,6 +258,7 @@ async def add_chan_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 3. ALL IN ONE ---
 async def aio_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     await update.callback_query.message.reply_text("🌟 **All-in-One Setup**\nLinks (comma separated):")
     return AIO_SET_LINKS
 
@@ -235,6 +289,7 @@ async def aio_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 4. PAYMENT & MEMBERS ---
 async def set_pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     keyboard = [
         [InlineKeyboardButton("🇮🇳 Set UPI", callback_data='set_pay_upi_btn')],
         [InlineKeyboardButton("🅿️ Set PayPal", callback_data='set_pay_paypal_btn')],
@@ -274,6 +329,7 @@ async def set_pay_save_paypal(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def admin_view_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     conn = get_db()
     c = conn.cursor()
     c.execute('''SELECT s.user_id, u.first_name, s.join_date, s.plan_name 
@@ -292,6 +348,7 @@ async def admin_view_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # --- 5. BROADCAST ---
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     keyboard = [[InlineKeyboardButton("To Bot Users", callback_data="bd_type_bot"), InlineKeyboardButton("To Channels", callback_data="bd_type_chan")]]
     await update.callback_query.message.reply_text("📣 Select Type:", reply_markup=InlineKeyboardMarkup(keyboard))
     return BROADCAST_SELECT_TYPE
@@ -378,6 +435,7 @@ async def add_bc_chan_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def admin_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     kb = [
         [InlineKeyboardButton("🗑 Delete Categories", callback_data='del_menu_cats')],
         [InlineKeyboardButton("🗑 Delete Channels", callback_data='del_menu_chans')],
@@ -451,6 +509,7 @@ async def perform_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- 7. EXPIRY SYSTEM ---
 
 async def admin_manage_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     keyboard = [
         [InlineKeyboardButton("📉 Review & Kick Expired (Manual)", callback_data='expire_manual_check')],
         [InlineKeyboardButton("⚡ Active Auto-Kick (Automatic)", callback_data='expire_auto_info')],
@@ -523,6 +582,7 @@ async def expire_auto_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "If a member is kicked, you will receive a notification here.\n\n"
         "✅ You do not need to do anything.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='admin_manage_expire')]]))
+    )
 
 async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
@@ -567,6 +627,7 @@ async def check_expiry_job(context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT count(*) FROM categories")
@@ -578,12 +639,18 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.callback_query.message.edit_text(f"📊 **Stats**\nCats: {cats}\nPlans: {chans}\nUsers: {users}", parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
 
-# --- 9. CHAT ---
+# --- 9. CHAT (SMART STATUS) ---
 async def user_start_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    if is_admin_online():
+        status = "🟢 **Admin is Online**"
+    else:
+        status = "🔴 **Admin is Offline**\n(Drop your message, we will reply soon)"
+        
     kb = [[InlineKeyboardButton("❌ End Chat", callback_data='end_chat_mode')]]
-    await query.message.edit_text("💬 **Chat with Admin**\nAllowed: Text & Photos.", reply_markup=InlineKeyboardMarkup(kb))
+    await query.message.edit_text(f"💬 **Chat with Admin**\n{status}\n\nAllowed: Text & Photos.", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     return USER_CHAT_MODE
 
 async def user_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -599,10 +666,11 @@ async def user_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def user_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
-    await user_show_categories(update, context)
+    await start(update, context) # Return to user home
     return ConversationHandler.END
 
 async def admin_start_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     query = update.callback_query
     await query.answer()
     target = int(query.data.split('_')[2])
@@ -612,6 +680,7 @@ async def admin_start_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_REPLY_MODE
 
 async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     target = context.user_data.get('reply_target')
     if target:
         await context.bot.copy_message(target, ADMIN_ID, update.message.message_id)
@@ -619,6 +688,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADMIN_REPLY_MODE
 
 async def admin_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     await update.callback_query.answer("Chat Ended")
     await start(update, context)
     return ConversationHandler.END
@@ -626,12 +696,12 @@ async def admin_end_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📚 **How to Use This Bot**\n\n"
-        "1️⃣ **Select a Category:** Choose a category from the main menu.\n"
-        "2️⃣ **Choose a Plan:** Click on a plan to see details.\n"
-        "3️⃣ **Make Payment:** Use the UPI or PayPal buttons to pay.\n"
-        "4️⃣ **Upload Screenshot:** Click the camera button and send your payment proof.\n"
-        "5️⃣ **Wait for Approval:** Admin will verify and you will get the link instantly!\n\n"
-        "📞 **Support:** Use the 'Chat with Admin' button for help."
+        "1️⃣ **Go Premium:** Click 'Go Premium' to see plans.\n"
+        "2️⃣ **Choose a Plan:** Select a category and plan.\n"
+        "3️⃣ **Payment:** Pay via UPI or PayPal.\n"
+        "4️⃣ **Screenshot:** Upload proof of payment.\n"
+        "5️⃣ **Approval:** Admin verifies and sends you the link!\n\n"
+        "📞 **Support:** Use 'Chat with Admin' for help."
     )
     await update.callback_query.message.edit_text(help_text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]))
 
@@ -644,25 +714,22 @@ async def user_show_categories(update: Update, context: ContextTypes.DEFAULT_TYP
     c.execute("SELECT * FROM aio_settings")
     aio = c.fetchone()
     conn.close()
+    
+    # 2 Column Layout for Categories
     kb = []
-    
     if aio: kb.append([InlineKeyboardButton("🌟 All-in-One Pack", callback_data="buy_aio")])
-    for cat in cats: kb.append([InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}")])
-    kb.append([InlineKeyboardButton("📞 Chat with Admin", callback_data="start_user_chat")])
-    kb.append([InlineKeyboardButton("ℹ️ How to Use", callback_data="show_help")])
     
-    text = (
-        "👋 **Welcome to Our Premium Store!**\n\n"
-        "🚀 **Unlock Exclusive Content Today!**\n"
-        "Browse our categories below to find the best plans for you.\n\n"
-        "⚡ *Instant Access • Secure Payment • 24/7 Support*\n\n"
-        "🤖 **Powered by RETOUCH**"
-    )
+    row = []
+    for cat in cats:
+        row.append(InlineKeyboardButton(f"📂 {cat[1]}", callback_data=f"view_cat_{cat[0]}"))
+        if len(row) == 2:
+            kb.append(row)
+            row = []
+    if row: kb.append(row)
     
-    if update.callback_query: 
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    else: 
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    kb.append([InlineKeyboardButton("🔙 Back", callback_data='user_home')])
+    
+    await update.callback_query.message.edit_text("👇 **Select a Category:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def user_show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -675,7 +742,7 @@ async def user_show_channels(update: Update, context: ContextTypes.DEFAULT_TYPE)
     conn.close()
     kb = []
     for chan in chans: kb.append([InlineKeyboardButton(f"{chan[2]} - {chan[4]}", callback_data=f"buy_{chan[0]}")])
-    kb.append([InlineKeyboardButton("🔙 Back", callback_data="user_home")])
+    kb.append([InlineKeyboardButton("🔙 Back", callback_data="user_show_cats")])
     await query.message.edit_text("👇 Select a plan to join:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -687,19 +754,29 @@ async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYP
     c.execute("SELECT upi_id, paypal_link FROM payment_settings")
     sets = c.fetchone()
     
+    category_name = "Premium"
+    
     if data == 'buy_aio':
         context.user_data['is_aio'] = True
         c.execute("SELECT * FROM aio_settings")
         aio = c.fetchone()
         info = ["All-in-One Pack", aio[2], aio[3]]
+        category_name = "All-in-One"
     else:
         context.user_data['is_aio'] = False
         chan_id = int(data.split('_')[1])
         context.user_data['selected_channel_id'] = chan_id
-        c.execute("SELECT name, price, duration FROM channels WHERE id=?", (chan_id,))
+        c.execute("SELECT name, price, duration, category_id FROM channels WHERE id=?", (chan_id,))
         info = c.fetchone()
+        
+        # Fetch Category Name
+        c.execute("SELECT name FROM categories WHERE id=?", (info[3],))
+        cat = c.fetchone()
+        if cat: category_name = cat[0]
     
     conn.close()
+    
+    context.user_data['category_name'] = category_name # Save for invoice
     
     payment_txt = ""
     if sets[0] != 'not_set': payment_txt += f"🇮🇳 **UPI ID:** `{sets[0]}`\n\n"
@@ -708,6 +785,7 @@ async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = (f"💳 **Payment Gateway**\n\n"
             f"📦 **Plan:** {info[0]}\n"
+            f"📂 **Category:** {category_name}\n"
             f"💸 **Price:** {info[1]}\n"
             f"⏳ **Duration:** {info[2]} Days\n\n"
             f"{payment_txt}"
@@ -758,6 +836,7 @@ async def handle_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_admin_activity()
     query = update.callback_query
     await query.answer()
     data = query.data.split('_')
@@ -775,23 +854,22 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         join_date = now.strftime("%Y-%m-%d")
         join_time = now.strftime("%I:%M %p")
         
-        # AIO Logic Fixed Here
+        # AIO Logic - Fixed fetching
         if data[2] == 'aio':
             c.execute("SELECT * FROM aio_settings")
             aio = c.fetchone()
             links_list = aio[1].split(',')
             formatted_links = "\n".join([f"🔗 {link.strip()}" for link in links_list])
             plan_name = "All-in-One Pack"
+            category_name = "All-in-One"
             duration = aio[3]
             
-            # Calculate Expiry
             expiry_dt = now + datetime.timedelta(days=duration)
             expiry_str = expiry_dt.strftime("%Y-%m-%d")
             expiry_db = expiry_dt.strftime("%Y-%m-%d %H:%M")
             
-            # Use 0 as channel_id for AIO since it has multiple
-            c.execute("INSERT INTO subscriptions (user_id, channel_db_id, join_date, expiry_date, channel_chat_id, plan_name) VALUES (?, ?, ?, ?, ?, ?)", 
-                      (uid, 0, join_date, expiry_db, 0, plan_name))
+            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name) VALUES (?, ?, ?, ?)", 
+                      (uid, join_date, expiry_db, plan_name))
             
         else:
             cid = int(data[2])
@@ -800,6 +878,11 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             plan_name = chan[2]
             duration = chan[6]
             formatted_links = f"🔗 **JOIN LINK:** {chan[3]}"
+            
+            # Fetch Category for Invoice
+            c.execute("SELECT name FROM categories WHERE id=?", (chan[1],))
+            cat_row = c.fetchone()
+            category_name = cat_row[0] if cat_row else "Premium"
             
             expiry_dt = now + datetime.timedelta(days=duration)
             expiry_str = expiry_dt.strftime("%Y-%m-%d")
@@ -822,6 +905,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    f"👤 **Member:** {user_info.first_name}\n"
                    f"🆔 **User ID:** `{uid}`\n"
                    f"━━━━━━━━━━━━━━━━━━━\n"
+                   f"📂 **Category:** {category_name}\n"
                    f"📦 **Plan:** {plan_name}\n"
                    f"⏳ **Duration:** {duration} Days\n"
                    f"🗓 **Expiry:** {expiry_str}\n"
@@ -921,6 +1005,7 @@ def main():
     application.add_handler(pay_process_conv)
 
     # General Callbacks
+    application.add_handler(CallbackQueryHandler(user_show_categories, pattern='user_show_cats'))
     application.add_handler(CallbackQueryHandler(user_show_channels, pattern='^view_cat_'))
     application.add_handler(CallbackQueryHandler(show_payment_options, pattern='^buy_'))
     application.add_handler(CallbackQueryHandler(admin_decision, pattern='^(appr|rej)_'))
