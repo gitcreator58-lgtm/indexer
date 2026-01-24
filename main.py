@@ -469,6 +469,7 @@ async def expire_manual_check(update: Update, context: ContextTypes.DEFAULT_TYPE
     c = conn.cursor()
     now_str = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M")
     
+    # Get expired users with names
     c.execute('''SELECT s.user_id, u.first_name, s.expiry_date 
                  FROM subscriptions s 
                  LEFT JOIN all_users u ON s.user_id = u.user_id 
@@ -809,7 +810,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     
-    # HANDLERS DEFINED AS VARIABLES
+    # HANDLERS DEFINED AS VARIABLES TO PREVENT SYNTAX ERRORS
     
     cat_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_cat_start, pattern='admin_add_cat')],
