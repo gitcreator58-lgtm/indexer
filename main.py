@@ -20,7 +20,7 @@ from telegram.error import BadRequest, Forbidden
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # --- CONFIGURATION ---
-TOKEN = '8501324652:AAEE84y5ZCnkWjMayqvL9w3OB1tFaAHf6oY' 
+TOKEN = '8362312218:AAE76YHbu2iHT3UE0QI-d2lDPOWmnHg5aQc' 
 ADMIN_ID = 8072674531 
 NOTIFICATION_GROUP_ID = -1001234567890 # <--- REPLACE WITH YOUR GROUP ID FOR ALERTS
 IST = pytz.timezone('Asia/Kolkata')
