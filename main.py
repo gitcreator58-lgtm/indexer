@@ -44,7 +44,6 @@ def start_web_server():
     server.serve_forever()
 
 # --- STATES ---
-(
     ADD_CAT_NAME,
     ADD_CHAN_CAT, ADD_CHAN_NAME, ADD_CHAN_LINK, ADD_CHAN_PRICE, ADD_CHAN_DURATION, ADD_CHAN_GROUP_ID,
     PAY_CHOOSE, PAY_INPUT_UPI, PAY_INPUT_PAYPAL,
