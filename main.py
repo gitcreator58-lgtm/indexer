@@ -22,7 +22,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 # --- CONFIGURATION ---
 TOKEN = '8362312218:AAE76YHbu2iHT3UE0QI-d2lDPOWmnHg5aQc' 
 ADMIN_ID = 8072674531 
-NOTIFICATION_GROUP_ID = -1001234567890 # <--- REPLACE WITH YOUR GROUP ID FOR ALERTS
 IST = pytz.timezone('Asia/Kolkata')
 PORT = 8080
 
@@ -49,13 +48,13 @@ def start_web_server():
     ADD_CAT_NAME,
     ADD_CHAN_CAT, ADD_CHAN_NAME, ADD_CHAN_LINK, ADD_CHAN_PRICE, ADD_CHAN_DURATION, ADD_CHAN_GROUP_ID,
     PAY_CHOOSE, PAY_INPUT_UPI, PAY_INPUT_PAYPAL,
-    BROADCAST_SELECT_TYPE, BROADCAST_CONTENT, BROADCAST_BUTTONS, BROADCAST_DATETIME, BROADCAST_TARGETS,
+    BROADCAST_SELECT_TYPE, BROADCAST_CONTENT, BROADCAST_DATETIME, BROADCAST_TARGETS, BROADCAST_BUTTONS,
     USER_UPLOAD_SCREENSHOT,
     USER_CHAT_MODE,
     ADMIN_REPLY_MODE,
     AIO_SET_LINKS, AIO_SET_PRICE, AIO_SET_DURATION,
-    MANUAL_ADD_DETAILS # For manual user entry
-) = range(22)
+    SET_NOTIFY_GROUP, SET_UPDATE_LINK, MANUAL_ADD_DETAILS
+) = range(23)
 
 # --- DATABASE SETUP ---
 def setup_db():
@@ -81,10 +80,17 @@ def setup_db():
                  (id INTEGER PRIMARY KEY, last_seen TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS active_chats
                  (user_id INTEGER PRIMARY KEY)''')
+    # New Settings Table
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_settings
+                 (id INTEGER PRIMARY KEY, notify_group_id TEXT, update_channel_link TEXT)''')
     
     c.execute("SELECT * FROM payment_settings")
     if not c.fetchone():
         c.execute("INSERT INTO payment_settings (upi_id, paypal_link) VALUES (?, ?)", ("not_set", "not_set"))
+
+    c.execute("SELECT * FROM bot_settings")
+    if not c.fetchone():
+        c.execute("INSERT INTO bot_settings (notify_group_id, update_channel_link) VALUES (?, ?)", ("not_set", "not_set"))
     
     conn.commit()
     conn.close()
@@ -160,6 +166,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🌟 Set All-in-One Pack", callback_data='admin_set_aio')],
             [InlineKeyboardButton("💰 Set Payment Info", callback_data='admin_set_pay'),
              InlineKeyboardButton("📢 Setup Broadcast", callback_data='admin_broadcast')],
+            [InlineKeyboardButton("🔔 Set Notify Group", callback_data='admin_set_group'),
+             InlineKeyboardButton("📢 Set Updates Link", callback_data='admin_set_update')],
             [InlineKeyboardButton("➕ Add Broadcast Channel", callback_data='admin_add_bc_chan'),
              InlineKeyboardButton("🚫 Manage Expired", callback_data='admin_manage_expire')],
             [InlineKeyboardButton("👀 View Stats", callback_data='admin_stats'),
@@ -189,6 +197,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         else:
             await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+# --- SETTINGS HANDLERS (GROUP & UPDATES) ---
+async def admin_set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("🔢 **Enter Group ID** for Notifications (e.g., -100123456789):")
+    return SET_NOTIFY_GROUP
+
+async def save_notify_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    gid = update.message.text
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE bot_settings SET notify_group_id=? WHERE id=1", (gid,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(f"✅ Notification Group set to: `{gid}`")
+    return ConversationHandler.END
+
+async def admin_set_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("🔗 **Enter Updates Channel Link** (e.g., https://t.me/mychannel):")
+    return SET_UPDATE_LINK
+
+async def save_update_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    link = update.message.text
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE bot_settings SET update_channel_link=? WHERE id=1", (link,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(f"✅ Updates Link saved: {link}")
+    return ConversationHandler.END
 
 # --- 1. ADD CATEGORY ---
 async def add_cat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -345,7 +382,7 @@ async def admin_view_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if len(msg) > 4000: msg = msg[:4000]
     await update.callback_query.message.edit_text(msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data='user_home')]]))
 
-# --- 5. BROADCAST (FIXED & IMPROVED) ---
+# --- 5. BROADCAST ---
 async def broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("To Users", callback_data="bd_type_bot"), InlineKeyboardButton("To Channels", callback_data="bd_type_chan")]]
     await update.callback_query.message.reply_text("Select Type:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -357,7 +394,6 @@ async def broadcast_type_handler(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['bd_type'] = query.data
     
     if query.data == 'bd_type_chan':
-        # Show Saved Channels List
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT * FROM broadcast_channels")
@@ -379,11 +415,10 @@ async def broadcast_type_handler(update: Update, context: ContextTypes.DEFAULT_T
         return BROADCAST_CONTENT
 
 async def broadcast_target_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # This handler now receives the callback from the channel selection
     query = update.callback_query
     await query.answer()
     chan_db_id = int(query.data.split('_')[2])
-    context.user_data['bd_target_db_id'] = chan_db_id # Store DB ID
+    context.user_data['bd_target_db_id'] = chan_db_id 
     
     await query.message.reply_text("Enter post (Text/Photo/Video):")
     return BROADCAST_CONTENT
@@ -417,8 +452,6 @@ async def broadcast_schedule_final(update: Update, context: ContextTypes.DEFAULT
 
 async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
     data = context.job.data
-    
-    # Construct Keyboard if buttons exist
     reply_markup = None
     if data.get('bd_buttons'):
         kb = []
@@ -428,7 +461,7 @@ async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
             if '-' in btn:
                 name, link = btn.split('-', 1)
                 row.append(InlineKeyboardButton(name.strip(), url=link.strip()))
-                if len(row) == 2: # 2 buttons per row logic
+                if len(row) == 2:
                     kb.append(row)
                     row = []
         if row: kb.append(row)
@@ -444,7 +477,6 @@ async def perform_broadcast(context: ContextTypes.DEFAULT_TYPE):
                 try: await context.bot.copy_message(u[0], data['bd_from_chat'], data['bd_msg_id'], reply_markup=reply_markup)
                 except: pass
         else:
-            # Fetch Chat ID from DB using saved ID
             c.execute("SELECT chat_id FROM broadcast_channels WHERE id=?", (data['bd_target_db_id'],))
             res = c.fetchone()
             if res: await context.bot.copy_message(res[0], data['bd_from_chat'], data['bd_msg_id'], reply_markup=reply_markup)
@@ -583,7 +615,7 @@ async def expire_manual_check(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     msg = "📉 **Expired Pending Removal:**\n" + "\n".join([f"ID: {r[0]} | Exp: {r[1]}" for r in expired])
-    kb = [[InlineKeyboardButton("🚫 Kick All Listed", callback_data='expire_kick_now')], [InlineKeyboardButton("Back", callback_data='admin_manage_expire')]]
+    kb = [[InlineKeyboardButton("Kick All", callback_data='expire_kick_now')], [InlineKeyboardButton("Back", callback_data='admin_manage_expire')]]
     await query.message.edit_text(msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
 
 async def expire_kick_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -878,6 +910,14 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         join_date = now.strftime("%Y-%m-%d")
         join_time = now.strftime("%I:%M %p")
         
+        # Get Bot Settings
+        c.execute("SELECT notify_group_id, update_channel_link FROM bot_settings WHERE id=1")
+        settings = c.fetchone()
+        notify_gid = settings[0]
+        update_link = settings[1]
+        
+        bot_username = (await context.bot.get_me()).username
+        
         # AIO Logic
         if data[2] == 'aio':
             c.execute("SELECT * FROM aio_settings")
@@ -886,6 +926,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             formatted_links = "\n".join([f"🔗 {link.strip()}" for link in links_list])
             plan_name = "All-in-One Pack"
             category_name = "All-in-One"
+            price = aio[2]
             duration = aio[3]
             
             expiry_dt = now + datetime.timedelta(days=duration)
@@ -901,8 +942,10 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chan = c.fetchone() 
             plan_name = chan[2]
             duration = chan[6]
+            price = chan[4]
             formatted_links = f"🔗 **JOIN LINK:** {chan[3]}"
             
+            # Fetch Category
             c.execute("SELECT name FROM categories WHERE id=?", (chan[1],))
             cat_row = c.fetchone()
             category_name = cat_row[0] if cat_row else "Premium"
@@ -919,7 +962,8 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         user_info = await context.bot.get_chat(uid)
         
-        # 1. Send Invoice to User
+        await context.bot.send_message(uid, f"🎉 **Payment Accepted!**\n\nHere are your links:\n{formatted_links}", parse_mode='Markdown')
+        
         invoice = (f"🧾 **DIGITAL INVOICE**\n"
                    f"━━━━━━━━━━━━━━━━━━━\n"
                    f"📅 **Date:** {join_date}\n"
@@ -934,23 +978,32 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    f"📅 **Year:** {now.year}\n"
                    f"━━━━━━━━━━━━━━━━━━━\n"
                    f"✅ **Status:** PAID")
-        
-        await context.bot.send_message(uid, f"🎉 **Payment Accepted!**\n\nHere are your links:\n{formatted_links}\n\n{invoice}", parse_mode='Markdown')
-        
-        # 2. Update Admin Message
+        await context.bot.send_message(uid, invoice, parse_mode='Markdown')
         await query.message.edit_caption(query.message.caption + "\n\n🟢 **ACCEPTED**")
 
-        # 3. Send Notification to Public Group
-        if NOTIFICATION_GROUP_ID:
+        # GROUP NOTIFICATIONS
+        if notify_gid != 'not_set':
+            # 1. Main Alert
             group_msg = (f"🔥 **New VIP Member!** 🔥\n\n"
                          f"👤 **User:** {user_info.first_name}\n"
                          f"📦 **Plan:** {plan_name}\n"
+                         f"📂 **Category:** {category_name}\n"
                          f"💰 **Amount:** PAID ✅\n"
                          f"📅 **Date:** {join_date}\n\n"
-                         f"🚀 **Join the only trusted source for premium content!**\n"
-                         f"👉 **@{(await context.bot.get_me()).username}**")
+                         f"💡 **Purchase VIP only from the trusted source!**\n"
+                         f"👉 [**Click Here to Buy**](https://t.me/{bot_username})")
+            
             try:
-                await context.bot.send_message(chat_id=NOTIFICATION_GROUP_ID, text=group_msg, parse_mode='Markdown')
+                await context.bot.send_message(chat_id=notify_gid, text=group_msg, parse_mode='Markdown', disable_web_page_preview=True)
+                
+                # 2. Update Channel Alert (Separate Message)
+                if update_link != 'not_set':
+                    update_msg = (f"📢 **Stay Updated!**\n\n"
+                                  f"See future updates, proofs, and news here:\n"
+                                  f"👉 {update_link}\n\n"
+                                  f"Get more information related to the VIP channel!")
+                    await context.bot.send_message(chat_id=notify_gid, text=update_msg, parse_mode='Markdown')
+                    
             except Exception as e:
                 logger.error(f"Failed to send group notification: {e}")
 
@@ -1000,8 +1053,7 @@ def main():
             PAY_INPUT_PAYPAL: [MessageHandler(filters.TEXT, set_pay_save_paypal)],
         },
         fallbacks=[CallbackQueryHandler(start, pattern='user_home')], allow_reentry=True)
-    
-    # Broadcast Flow: Select Type -> (Select Channel) -> Content -> Buttons -> Time
+
     broadcast_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_menu, pattern='admin_broadcast')],
         states={
@@ -1021,6 +1073,16 @@ def main():
     manual_add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(manual_add_start, pattern='expire_manual_add')],
         states={MANUAL_ADD_DETAILS: [MessageHandler(filters.TEXT, manual_add_save)]},
+        fallbacks=[], allow_reentry=True)
+        
+    set_group_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_set_group, pattern='admin_set_group')],
+        states={SET_NOTIFY_GROUP: [MessageHandler(filters.TEXT, save_notify_group)]},
+        fallbacks=[], allow_reentry=True)
+        
+    set_update_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_set_update, pattern='admin_set_update')],
+        states={SET_UPDATE_LINK: [MessageHandler(filters.TEXT, save_update_link)]},
         fallbacks=[], allow_reentry=True)
 
     user_chat_conv = ConversationHandler(
@@ -1047,6 +1109,8 @@ def main():
     application.add_handler(broadcast_conv)
     application.add_handler(bc_chan_conv)
     application.add_handler(manual_add_conv)
+    application.add_handler(set_group_conv)
+    application.add_handler(set_update_conv)
     application.add_handler(user_chat_conv)
     application.add_handler(admin_reply_conv)
     application.add_handler(pay_process_conv)
