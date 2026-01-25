@@ -53,7 +53,7 @@ def start_web_server():
     ADMIN_REPLY_MODE,
     AIO_SET_LINKS, AIO_SET_PRICE, AIO_SET_DURATION,
     SET_NOTIFY_GROUP, SET_UPDATE_LINK, MANUAL_ADD_DETAILS
-) = range(23)
+ = range(23)
 
 # --- DATABASE SETUP ---
 def setup_db():
