@@ -199,6 +199,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- SETTINGS HANDLERS (GROUP & UPDATES) ---
 async def admin_set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT notify_group_id FROM bot_settings WHERE id=1")
@@ -220,7 +221,6 @@ async def save_notify_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gid = update.message.text
     conn = get_db()
     c = conn.cursor()
-    # Explicitly update ONLY notify_group_id
     c.execute("UPDATE bot_settings SET notify_group_id=? WHERE id=1", (gid,))
     conn.commit()
     conn.close()
@@ -234,10 +234,11 @@ async def reset_notify_group_handler(update: Update, context: ContextTypes.DEFAU
     conn.commit()
     conn.close()
     await update.callback_query.answer("Group ID Removed!", show_alert=True)
-    await admin_set_group(update, context) # Refresh view
+    await admin_set_group(update, context) 
     return SET_NOTIFY_GROUP
 
 async def admin_set_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT update_channel_link FROM bot_settings WHERE id=1")
@@ -247,8 +248,9 @@ async def admin_set_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (f"📢 **Update Channel Settings**\n\n"
             f"🔹 **Current Link:** {current_link}\n\n"
             f"👇 **To Set/Change:** Send the new Link (e.g. https://t.me/mychannel)")
-            
-    await update.callback_query.message.edit_text(text, parse_mode='Markdown')
+    
+    kb = [[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]
+    await update.callback_query.message.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
     return SET_UPDATE_LINK
 
 async def save_update_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -541,7 +543,7 @@ async def add_bc_chan_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name, chat_id = update.message.text.split('|')
         conn = get_db()
         c = conn.cursor()
-        c.execute("INSERT INTO broadcast_channels (name, chat_id) VALUES (?, ?)", (name, chat_id))
+        c.execute("INSERT INTO broadcast_channels (name, chat_id) VALUES (?, ?)", (name.strip(), chat_id.strip()))
         conn.commit()
         conn.close()
         await update.message.reply_text("✅ Saved.")
@@ -905,60 +907,94 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(uid, "❌ **Payment Rejected.**")
         await query.message.edit_caption("🔴 **REJECTED**")
     elif action == 'appr':
-        conn = get_db()
-        c = conn.cursor()
-        now = datetime.datetime.now(IST)
-        j_date = now.strftime("%Y-%m-%d")
-        j_time = now.strftime("%I:%M %p")
-        
-        c.execute("SELECT notify_group_id, update_channel_link FROM bot_settings WHERE id=1")
-        settings = c.fetchone()
-        notify_gid = settings[0]
-        up_link = settings[1]
-        bot_user = (await context.bot.get_me()).username
-        
-        if data[2] == 'aio':
-            c.execute("SELECT * FROM aio_settings")
-            aio = c.fetchone()
-            links = aio[1].split(',')
-            f_links = "\n".join([f"🔗 {l.strip()}" for l in links])
-            p_name = "All-in-One Pack"
-            cat_name = "All-in-One"
-            dur = aio[3]
-            exp_dt = now + datetime.timedelta(days=dur)
-            exp_str = exp_dt.strftime("%Y-%m-%d")
-            c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name, channel_chat_id, channel_db_id) VALUES (?, ?, ?, ?, 0, 0)", (uid, j_date, exp_dt.strftime("%Y-%m-%d %H:%M"), p_name))
-        else:
-            cid = int(data[2])
-            c.execute("SELECT * FROM channels WHERE id=?", (cid,))
-            chan = c.fetchone()
-            p_name = chan[2]
-            dur = chan[6]
-            f_links = f"🔗 **JOIN LINK:** {chan[3]}"
-            c.execute("SELECT name FROM categories WHERE id=?", (chan[1],))
-            cat = c.fetchone()
-            cat_name = cat[0] if cat else "Premium"
-            exp_dt = now + datetime.timedelta(days=dur)
-            exp_str = exp_dt.strftime("%Y-%m-%d")
-            c.execute("INSERT INTO subscriptions (user_id, channel_db_id, join_date, expiry_date, channel_chat_id, plan_name) VALUES (?, ?, ?, ?, ?, ?)", (uid, cid, j_date, exp_dt.strftime("%Y-%m-%d %H:%M"), chan[5], p_name))
-        
-        conn.commit()
-        conn.close()
-        
-        u_info = await context.bot.get_chat(uid)
-        await context.bot.send_message(uid, f"🎉 **Payment Accepted!**\n\nLinks:\n{f_links}", parse_mode='Markdown')
-        inv = (f"🧾 **DIGITAL INVOICE**\n━━━━━━━━\n📅 **Date:** {j_date}\n🕒 **Time:** {j_time}\n👤 **User:** {u_info.first_name}\n🆔 **ID:** `{uid}`\n━━━━━━━━\n📂 **Cat:** {cat_name}\n📦 **Plan:** {p_name}\n⏳ **Days:** {dur}\n🗓 **Exp:** {exp_str}\n━━━━━━━━\n✅ **PAID**")
-        await context.bot.send_message(uid, inv, parse_mode='Markdown')
-        await query.message.edit_caption("🟢 **ACCEPTED**")
-        
-        if notify_gid != 'not_set':
-            g_msg = (f"🔥 **New VIP Member!** 🔥\n\n👤 **User:** {u_info.first_name}\n📦 **Plan:** {p_name}\n📂 **Category:** {cat_name}\n💰 **Amount:** PAID ✅\n📅 **Date:** {j_date}\n\n💡 **Purchase VIP only from the trusted source!**\n👉 [**Click Here to Buy**](https://t.me/{bot_user})")
-            try:
-                await context.bot.send_message(chat_id=notify_gid, text=g_msg, parse_mode='Markdown', disable_web_page_preview=True)
-                if up_link != 'not_set':
-                    await context.bot.send_message(chat_id=notify_gid, text=f"📢 **Stay Updated!**\n\nProofs & News here:\n👉 {up_link}\n\nGet more information related to the VIP channel!", parse_mode='Markdown')
-            except Exception as e:
-                logging.error(f"Group notify failed: {e}")
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            now = datetime.datetime.now(IST)
+            j_date = now.strftime("%Y-%m-%d")
+            j_time = now.strftime("%I:%M %p")
+            
+            # SAFE FETCH SETTINGS
+            c.execute("SELECT notify_group_id, update_channel_link FROM bot_settings WHERE id=1")
+            settings = c.fetchone()
+            if not settings: 
+                notify_gid = 'not_set'
+                up_link = 'not_set'
+            else:
+                notify_gid = settings[0]
+                up_link = settings[1]
+            
+            bot_user = (await context.bot.get_me()).username
+            
+            # LOGIC FOR PLANS
+            if data[2] == 'aio':
+                c.execute("SELECT * FROM aio_settings")
+                aio = c.fetchone()
+                links = aio[1].split(',')
+                f_links = "\n".join([f"🔗 {l.strip()}" for l in links])
+                p_name = "All-in-One Pack"
+                cat_name = "All-in-One"
+                dur = aio[3]
+                exp_dt = now + datetime.timedelta(days=dur)
+                exp_str = exp_dt.strftime("%Y-%m-%d")
+                # Fix: Use 0 for IDs in AIO
+                c.execute("INSERT INTO subscriptions (user_id, join_date, expiry_date, plan_name, channel_chat_id, channel_db_id) VALUES (?, ?, ?, ?, 0, 0)", 
+                          (uid, j_date, exp_dt.strftime("%Y-%m-%d %H:%M"), p_name))
+            else:
+                cid = int(data[2])
+                c.execute("SELECT * FROM channels WHERE id=?", (cid,))
+                chan = c.fetchone()
+                p_name = chan[2]
+                dur = chan[6]
+                f_links = f"🔗 **JOIN LINK:** {chan[3]}"
+                
+                # Safe Category Fetch
+                c.execute("SELECT name FROM categories WHERE id=?", (chan[1],))
+                cat = c.fetchone()
+                cat_name = cat[0] if cat else "Premium"
+                
+                exp_dt = now + datetime.timedelta(days=dur)
+                exp_str = exp_dt.strftime("%Y-%m-%d")
+                c.execute("INSERT INTO subscriptions (user_id, channel_db_id, join_date, expiry_date, channel_chat_id, plan_name) VALUES (?, ?, ?, ?, ?, ?)", 
+                          (uid, cid, j_date, exp_dt.strftime("%Y-%m-%d %H:%M"), chan[5], p_name))
+            
+            conn.commit()
+            conn.close()
+            
+            # USER MESSAGES
+            u_info = await context.bot.get_chat(uid)
+            await context.bot.send_message(uid, f"🎉 **Payment Accepted!**\n\nLinks:\n{f_links}", parse_mode='Markdown')
+            inv = (f"🧾 **DIGITAL INVOICE**\n━━━━━━━━\n📅 **Date:** {j_date}\n🕒 **Time:** {j_time}\n👤 **User:** {u_info.first_name}\n🆔 **ID:** `{uid}`\n━━━━━━━━\n📂 **Cat:** {cat_name}\n📦 **Plan:** {p_name}\n⏳ **Days:** {dur}\n🗓 **Exp:** {exp_str}\n━━━━━━━━\n✅ **PAID**")
+            await context.bot.send_message(uid, inv, parse_mode='Markdown')
+            await query.message.edit_caption("🟢 **ACCEPTED**")
+            
+            # GROUP NOTIFICATION 1: SALES
+            if notify_gid != 'not_set':
+                g_msg = (f"🔥 **New VIP Member!** 🔥\n\n"
+                         f"👤 **User:** {u_info.first_name}\n"
+                         f"📦 **Plan:** {p_name}\n"
+                         f"📂 **Category:** {cat_name}\n"
+                         f"💰 **Amount:** PAID ✅\n"
+                         f"📅 **Date:** {j_date}\n\n"
+                         f"💡 **Purchase VIP only from the trusted source!**\n"
+                         f"👉 [**@{bot_user}**](https://t.me/{bot_user})")
+                try:
+                    await context.bot.send_message(chat_id=notify_gid, text=g_msg, parse_mode='Markdown', disable_web_page_preview=True)
+                    
+                    # GROUP NOTIFICATION 2: UPDATES (SEPARATE MESSAGE)
+                    if up_link != 'not_set':
+                        update_msg = (f"📢 **Stay Updated!**\n\n"
+                                      f"See future updates, proofs, and news here:\n"
+                                      f"👉 {up_link}\n\n"
+                                      f"Get more information related to the VIP channel!")
+                        await context.bot.send_message(chat_id=notify_gid, text=update_msg, parse_mode='Markdown')
+                        
+                except Exception as e:
+                    logging.error(f"Group notify failed: {e}")
+                    
+        except Exception as e:
+            logging.error(f"Approval Error: {e}")
+            await context.bot.send_message(ADMIN_ID, f"⚠️ Error approving user: {e}")
 
 # --- MAIN ---
 async def pay_conv_entry(update, context):
@@ -979,7 +1015,7 @@ def main():
     broadcast_conv = ConversationHandler(entry_points=[CallbackQueryHandler(broadcast_menu, pattern='admin_broadcast')], states={BROADCAST_SELECT_TYPE: [CallbackQueryHandler(broadcast_type_handler)], BROADCAST_TARGETS: [CallbackQueryHandler(broadcast_target_save, pattern='^bd_sel_')], BROADCAST_CONTENT: [MessageHandler(filters.ALL, broadcast_content_save)], BROADCAST_BUTTONS: [MessageHandler(filters.TEXT, broadcast_buttons_save)], BROADCAST_DATETIME: [MessageHandler(filters.TEXT, broadcast_schedule_final)]}, fallbacks=[], allow_reentry=True)
     bc_chan_conv = ConversationHandler(entry_points=[CallbackQueryHandler(add_bc_chan_start, pattern='admin_add_bc_chan')], states={1: [MessageHandler(filters.TEXT, add_bc_chan_save)]}, fallbacks=[], allow_reentry=True)
     manual_add_conv = ConversationHandler(entry_points=[CallbackQueryHandler(manual_add_start, pattern='expire_manual_add')], states={MANUAL_ADD_DETAILS: [MessageHandler(filters.TEXT, manual_add_save)]}, fallbacks=[], allow_reentry=True)
-    set_group_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_set_group, pattern='admin_set_group')], states={SET_NOTIFY_GROUP: [MessageHandler(filters.TEXT, save_notify_group), CallbackQueryHandler(reset_notify_group_handler, pattern='reset_notify_group')]}, fallbacks=[], allow_reentry=True)
+    set_group_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_set_group, pattern='admin_set_group')], states={SET_NOTIFY_GROUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_notify_group), CallbackQueryHandler(reset_notify_group_handler, pattern='reset_notify_group')]}, fallbacks=[], allow_reentry=True)
     set_update_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_set_update, pattern='admin_set_update')], states={SET_UPDATE_LINK: [MessageHandler(filters.TEXT, save_update_link)]}, fallbacks=[], allow_reentry=True)
     user_chat_conv = ConversationHandler(entry_points=[CallbackQueryHandler(user_start_chat, pattern='start_user_chat')], states={USER_CHAT_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, user_send_message), MessageHandler(filters.VIDEO, user_send_message)]}, fallbacks=[CallbackQueryHandler(user_end_chat, pattern='end_chat_mode')], allow_reentry=True)
     admin_reply_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_start_reply, pattern='^adm_reply_')], states={ADMIN_REPLY_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, admin_send_reply)]}, fallbacks=[CallbackQueryHandler(admin_end_chat, pattern='^adm_end_')], allow_reentry=True)
