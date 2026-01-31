@@ -247,9 +247,12 @@ async def admin_set_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     text = (f"📢 **Update Channel Settings**\n\n"
             f"🔹 **Current Link:** {current_link}\n\n"
-            f"👇 **To Set/Change:** Send the new Link (e.g. https://t.me/mychannel)")
+            f"👇 **To Set/Change:** Send the new Link (e.g. https://t.me/mychannel)\n"
+            f"👇 **To Remove:** Click Delete below.")
     
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data='user_home')]]
+    kb = [[InlineKeyboardButton("❌ Delete Link", callback_data='reset_update_link')],
+          [InlineKeyboardButton("🔙 Back", callback_data='user_home')]]
+          
     await update.callback_query.message.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
     return SET_UPDATE_LINK
 
@@ -257,12 +260,21 @@ async def save_update_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = update.message.text
     conn = get_db()
     c = conn.cursor()
-    # Explicitly update ONLY update_channel_link
     c.execute("UPDATE bot_settings SET update_channel_link=? WHERE id=1", (link,))
     conn.commit()
     conn.close()
     await update.message.reply_text(f"✅ Updates Link saved: {link}")
     return ConversationHandler.END
+
+async def reset_update_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE bot_settings SET update_channel_link='not_set' WHERE id=1")
+    conn.commit()
+    conn.close()
+    await update.callback_query.answer("Link Removed!", show_alert=True)
+    await admin_set_update(update, context) 
+    return SET_UPDATE_LINK
 
 # --- 1. ADD CATEGORY ---
 async def add_cat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -977,7 +989,7 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          f"💰 **Amount:** PAID ✅\n"
                          f"📅 **Date:** {j_date}\n\n"
                          f"💡 **Purchase VIP only from the trusted source!**\n"
-                         f"👉 [**@{bot_user}**](https://t.me/{bot_user})")
+                         f"👉 [**Click Here to Buy**](https://t.me/{bot_user})")
                 try:
                     await context.bot.send_message(chat_id=notify_gid, text=g_msg, parse_mode='Markdown', disable_web_page_preview=True)
                     
@@ -1015,8 +1027,31 @@ def main():
     broadcast_conv = ConversationHandler(entry_points=[CallbackQueryHandler(broadcast_menu, pattern='admin_broadcast')], states={BROADCAST_SELECT_TYPE: [CallbackQueryHandler(broadcast_type_handler)], BROADCAST_TARGETS: [CallbackQueryHandler(broadcast_target_save, pattern='^bd_sel_')], BROADCAST_CONTENT: [MessageHandler(filters.ALL, broadcast_content_save)], BROADCAST_BUTTONS: [MessageHandler(filters.TEXT, broadcast_buttons_save)], BROADCAST_DATETIME: [MessageHandler(filters.TEXT, broadcast_schedule_final)]}, fallbacks=[], allow_reentry=True)
     bc_chan_conv = ConversationHandler(entry_points=[CallbackQueryHandler(add_bc_chan_start, pattern='admin_add_bc_chan')], states={1: [MessageHandler(filters.TEXT, add_bc_chan_save)]}, fallbacks=[], allow_reentry=True)
     manual_add_conv = ConversationHandler(entry_points=[CallbackQueryHandler(manual_add_start, pattern='expire_manual_add')], states={MANUAL_ADD_DETAILS: [MessageHandler(filters.TEXT, manual_add_save)]}, fallbacks=[], allow_reentry=True)
-    set_group_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_set_group, pattern='admin_set_group')], states={SET_NOTIFY_GROUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_notify_group), CallbackQueryHandler(reset_notify_group_handler, pattern='reset_notify_group')]}, fallbacks=[], allow_reentry=True)
-    set_update_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_set_update, pattern='admin_set_update')], states={SET_UPDATE_LINK: [MessageHandler(filters.TEXT, save_update_link)]}, fallbacks=[], allow_reentry=True)
+    
+    # FIXED: Added reset handler here
+    set_group_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_set_group, pattern='admin_set_group')], 
+        states={
+            SET_NOTIFY_GROUP: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_notify_group), 
+                CallbackQueryHandler(reset_notify_group_handler, pattern='reset_notify_group')
+            ]
+        }, 
+        fallbacks=[], allow_reentry=True
+    )
+    
+    # FIXED: Added reset handler here
+    set_update_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_set_update, pattern='admin_set_update')], 
+        states={
+            SET_UPDATE_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_update_link),
+                CallbackQueryHandler(reset_update_link_handler, pattern='reset_update_link')
+            ]
+        }, 
+        fallbacks=[], allow_reentry=True
+    )
+    
     user_chat_conv = ConversationHandler(entry_points=[CallbackQueryHandler(user_start_chat, pattern='start_user_chat')], states={USER_CHAT_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, user_send_message), MessageHandler(filters.VIDEO, user_send_message)]}, fallbacks=[CallbackQueryHandler(user_end_chat, pattern='end_chat_mode')], allow_reentry=True)
     admin_reply_conv = ConversationHandler(entry_points=[CallbackQueryHandler(admin_start_reply, pattern='^adm_reply_')], states={ADMIN_REPLY_MODE: [MessageHandler(filters.TEXT | filters.PHOTO, admin_send_reply)]}, fallbacks=[CallbackQueryHandler(admin_end_chat, pattern='^adm_end_')], allow_reentry=True)
     pay_process_conv = ConversationHandler(entry_points=[CallbackQueryHandler(pay_conv_entry, pattern='req_upload_ss')], states={USER_UPLOAD_SCREENSHOT: [MessageHandler(filters.PHOTO, handle_screenshot)]}, fallbacks=[], allow_reentry=True)
